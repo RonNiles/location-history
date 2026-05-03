@@ -1,0 +1,446 @@
+/* Cartographic / archival aesthetic. Color palette is ink-on-paper:
+   warm off-white background, deep ink for text, a single cinnabar
+   accent for selected/active states.
+
+   Typography pairs EB Garamond (serif, for headings) with JetBrains
+   Mono (everywhere data appears). Sans-serif is intentionally
+   minimal — only the body copy uses the system stack as a fallback.
+
+   Fonts are vendored under vendor/fonts/ (woff2, latin subset only).
+   font-display: swap means we render with fallback fonts immediately
+   and swap to the real face once the woff2 loads. */
+
+@font-face {
+  font-family: 'EB Garamond';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('vendor/fonts/eb-garamond-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'EB Garamond';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url('vendor/fonts/eb-garamond-latin-400-italic.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'EB Garamond';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('vendor/fonts/eb-garamond-latin-600-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('vendor/fonts/jetbrains-mono-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('vendor/fonts/jetbrains-mono-latin-500-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('vendor/fonts/jetbrains-mono-latin-700-normal.woff2') format('woff2');
+}
+
+:root {
+  --c-paper:        #f4f1e8;       /* aged paper */
+  --c-paper-dim:    #ebe6d6;
+  --c-rule:         #c9c1a8;
+  --c-ink:          #2a2620;       /* warm near-black */
+  --c-ink-dim:      #6e6857;
+  --c-ink-muted:    #98917f;
+  --c-accent:       #b13b27;       /* deep cinnabar */
+  --c-accent-dim:   #d6a89c;
+
+  /* Layer palette — keep saturation moderate; we want them readable
+     against OSM raster tiles which have their own muted greens/grays. */
+  --c-visit:        #2a5b8c;       /* faded indigo */
+  --c-walking:      #2f7a4f;       /* sage green */
+  --c-cycling:      #c08a2e;       /* mustard */
+  --c-driving:      #8b3a62;       /* mulberry */
+  --c-transit:      #4a6075;       /* slate */
+  --c-flying:       #6e3b8a;       /* violet */
+  --c-unknown:      #777067;       /* warm gray */
+  --c-signal:       #a13e2c;       /* rust */
+  --c-heat:         #a83b1f;
+  --c-radius:       #b13b27;
+
+  --f-serif:        'EB Garamond', Cambria, Georgia, serif;
+  --f-mono:         'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--c-paper);
+  color: var(--c-ink);
+  font-family: var(--f-mono);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Subtle paper-grain noise applied as a background pattern, only
+   visible on the sidebar. Cheap procedural texture using SVG. */
+#sidebar {
+  width: 340px;
+  flex-shrink: 0;
+  height: 100vh;
+  overflow-y: auto;
+  background-color: var(--c-paper);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/><feColorMatrix values='0 0 0 0 0.16  0 0 0 0 0.14  0 0 0 0 0.12  0 0 0 0.06 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  border-right: 1px solid var(--c-rule);
+  display: flex;
+  flex-direction: column;
+}
+
+#map {
+  flex: 1;
+  height: 100vh;
+  background: #d8d3c0;        /* the world before tiles load */
+  position: relative;
+}
+
+/* ---------- sidebar header ---------- */
+
+.sidebar-header {
+  padding: 22px 22px 16px;
+  border-bottom: 1px solid var(--c-rule);
+}
+.sidebar-header h1 {
+  font-family: var(--f-serif);
+  font-size: 26px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  margin: 0;
+  line-height: 1.1;
+}
+.sidebar-header h1 .amp {
+  font-style: italic;
+  color: var(--c-accent);
+  font-weight: 400;
+}
+.status {
+  margin: 8px 0 0;
+  color: var(--c-ink-dim);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* ---------- panels ---------- */
+
+.panel {
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--c-rule);
+}
+.panel h2 {
+  font-family: var(--f-serif);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--c-ink-dim);
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+
+/* ---------- date controls ---------- */
+
+.date-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.date-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.date-row span {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--c-ink-muted);
+}
+.date-row input {
+  font-family: var(--f-mono);
+  font-size: 12px;
+  background: transparent;
+  border: 1px solid var(--c-rule);
+  padding: 4px 6px;
+  color: var(--c-ink);
+  border-radius: 0;
+}
+.date-row input:focus {
+  outline: none;
+  border-color: var(--c-accent);
+}
+
+.quick-ranges {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 14px;
+}
+.quick-ranges button {
+  flex: 1;
+  background: transparent;
+  border: 1px solid var(--c-rule);
+  padding: 4px 0;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--c-ink-dim);
+  cursor: pointer;
+  border-radius: 0;
+}
+.quick-ranges button:hover {
+  border-color: var(--c-ink-dim);
+  color: var(--c-ink);
+}
+.quick-ranges button.active {
+  background: var(--c-ink);
+  color: var(--c-paper);
+  border-color: var(--c-ink);
+}
+
+/* ---------- coverage strip ---------- */
+
+.coverage-strip {
+  position: relative;
+  margin-top: 12px;
+}
+#coverage-svg {
+  display: block;
+  width: 100%;
+  height: 24px;
+  background: var(--c-paper-dim);
+  cursor: crosshair;
+}
+.coverage-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--c-ink-muted);
+  letter-spacing: 0.05em;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- layer toggles ---------- */
+
+.layer-list { list-style: none; margin: 0; padding: 0; }
+.layer-list li { margin-bottom: 8px; }
+.layer-list label {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+.layer-list label:hover { color: var(--c-ink); }
+.layer-list em {
+  font-style: italic;
+  color: var(--c-ink-muted);
+  font-size: 10px;
+}
+.swatch {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--c-rule);
+  flex-shrink: 0;
+}
+.count {
+  font-size: 10px;
+  color: var(--c-ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- tools ---------- */
+
+.tool-btn {
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--c-ink-dim);
+  padding: 6px 10px;
+  font-family: var(--f-mono);
+  font-size: 12px;
+  color: var(--c-ink);
+  cursor: pointer;
+  text-align: left;
+  border-radius: 0;
+}
+.tool-btn:hover {
+  background: var(--c-paper-dim);
+}
+.tool-btn.active {
+  background: var(--c-accent);
+  color: var(--c-paper);
+  border-color: var(--c-accent);
+}
+.tool-hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--c-accent);
+  font-style: italic;
+}
+.tool-hint[hidden] { display: none; }
+
+.radius-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.radius-controls[hidden] { display: none; }
+.radius-controls label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+}
+.radius-controls input {
+  flex: 1;
+  font-family: var(--f-mono);
+  font-size: 12px;
+  background: transparent;
+  border: 1px solid var(--c-rule);
+  padding: 4px 6px;
+  color: var(--c-ink);
+  border-radius: 0;
+}
+.radius-controls .unit {
+  font-size: 10px;
+  color: var(--c-ink-muted);
+}
+.ghost {
+  background: transparent;
+  border: 1px solid var(--c-rule);
+  padding: 4px 8px;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--c-ink-dim);
+  cursor: pointer;
+}
+.ghost:hover { color: var(--c-ink); }
+
+/* ---------- results ---------- */
+
+.results { flex: 1; overflow-y: auto; }
+.results .result {
+  border-top: 1px dashed var(--c-rule);
+  padding: 8px 0;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+}
+.results .result:first-child { border-top: none; }
+.results .result:hover { background: var(--c-paper-dim); }
+.results .result .when {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  color: var(--c-ink-dim);
+  letter-spacing: 0.03em;
+  font-variant-numeric: tabular-nums;
+}
+.results .result .what {
+  font-family: var(--f-serif);
+  font-style: italic;
+  font-size: 14px;
+}
+.results .result .dist {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  color: var(--c-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- footer ---------- */
+
+.sidebar-footer {
+  padding: 10px 22px;
+  font-size: 10px;
+  color: var(--c-ink-muted);
+  border-top: 1px solid var(--c-rule);
+  letter-spacing: 0.03em;
+}
+.sidebar-footer a {
+  color: var(--c-ink-dim);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--c-ink-muted);
+}
+.sidebar-footer a:hover { color: var(--c-accent); border-color: var(--c-accent); }
+
+/* ---------- hover popup ---------- */
+
+#hover-popup {
+  position: absolute;
+  pointer-events: none;
+  background: var(--c-paper);
+  border: 1px solid var(--c-ink);
+  padding: 6px 10px;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--c-ink);
+  z-index: 1000;
+  max-width: 280px;
+  box-shadow: 2px 2px 0 var(--c-ink-dim);
+  line-height: 1.4;
+}
+#hover-popup .h { font-family: var(--f-serif); font-style: italic; font-size: 13px; }
+#hover-popup .h.act { color: var(--c-walking); }
+#hover-popup .h.visit { color: var(--c-visit); }
+#hover-popup .meta { color: var(--c-ink-dim); font-size: 10px; }
+#hover-popup hr {
+  border: none;
+  border-top: 1px dashed var(--c-rule);
+  margin: 4px 0;
+}
+
+/* ---------- map cursor states ---------- */
+
+#map.radius-mode .maplibregl-canvas { cursor: crosshair !important; }
+.maplibregl-popup-content {
+  font-family: var(--f-mono);
+  font-size: 12px;
+  background: var(--c-paper);
+  color: var(--c-ink);
+  border: 1px solid var(--c-ink);
+  border-radius: 0;
+  box-shadow: 2px 2px 0 var(--c-ink-dim);
+  padding: 8px 10px;
+}
+.maplibregl-popup-tip { display: none; }
+.maplibregl-ctrl-attrib {
+  background: rgba(244, 241, 232, 0.85) !important;
+  font-family: var(--f-mono);
+  font-size: 10px;
+}
+
+/* ---------- scrollbar (sidebar) ---------- */
+#sidebar::-webkit-scrollbar { width: 8px; }
+#sidebar::-webkit-scrollbar-track { background: transparent; }
+#sidebar::-webkit-scrollbar-thumb { background: var(--c-rule); }
+#sidebar::-webkit-scrollbar-thumb:hover { background: var(--c-ink-dim); }

@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.env
+.DS_Store
+
+# Don't commit your actual export!
+*.json
+!**/package*.json
+
+# Go build artifacts
+bin/
+api/bin/

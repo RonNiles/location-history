@@ -1,0 +1,23 @@
+# Container for the Python ingest tools. Built once, used for every
+# `docker compose run --rm ingest ...` invocation.
+FROM python:3.12-slim-bookworm
+
+WORKDIR /work
+
+# Install deps in their own layer so source edits don't reinvalidate.
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Copy the migration + ingest code. The /work/exports volume is
+# mounted at runtime for source files; /work/db/migrations is the
+# Alembic config.
+COPY alembic.ini /work/alembic.ini
+COPY db /work/db
+COPY app /work/app
+
+ENV PYTHONUNBUFFERED=1
+# Default DSN points at the in-network Postgres service.
+ENV DATABASE_URL=postgresql+psycopg://locuser:locpass@db:5432/location_history
+
+# No ENTRYPOINT — compose passes the command per invocation
+# (alembic upgrade, app.ingest, app.ingest_dir, etc.).

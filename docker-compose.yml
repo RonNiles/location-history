@@ -1,0 +1,96 @@
+# Compose layout:
+#
+#   db       PostGIS, no host port — only reachable from the compose network.
+#   api      Go read API, exposes 8000 on host (loopback only).
+#   ingest   Python ingester, profile=tools, run on demand:
+#                docker compose run --rm ingest <args>
+#   psql     One-shot psql shell, profile=tools.
+#
+# Default `docker compose up -d` brings up only db + api.
+#
+# To expose the DB on the host (desktop tool), use the override:
+#   docker compose -f docker-compose.yml -f docker-compose.expose.yml up -d
+# or the `make db-expose` shortcut.
+
+x-db-env: &db-env
+  POSTGRES_USER: locuser
+  POSTGRES_PASSWORD: locpass
+  POSTGRES_DB: location_history
+
+x-app-db-url: &app-db-url
+  # In-network DSN. The "db" hostname is the service name and is
+  # resolved by Docker's embedded DNS.
+  DATABASE_URL: "postgresql://locuser:locpass@db:5432/location_history"
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: location-history-db
+    restart: unless-stopped
+    environment: *db-env
+    # No `ports:` — the DB is only reachable from other services
+    # on the compose network. To temporarily expose it for a desktop
+    # tool, see `make db-expose` (uses docker-compose.expose.yml).
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    command:
+      - "postgres"
+      - "-c"
+      - "config_file=/etc/postgresql/postgresql.conf"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U locuser -d location_history"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: location-history-api
+    restart: unless-stopped
+    environment:
+      <<: *app-db-url
+      LISTEN: 0.0.0.0:8000
+    ports:
+      # Bound to loopback only — not visible to other machines on
+      # your network. The host port is configurable via API_PORT
+      # in .env (defaults to 8000).
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ---- on-demand tools (profile=tools) ----
+
+  ingest:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    environment:
+      # Both forms — raw psycopg for the importer, +psycopg for Alembic.
+      DATABASE_URL: "postgresql://locuser:locpass@db:5432/location_history"
+      DATABASE_URL_SQLA: "postgresql+psycopg://locuser:locpass@db:5432/location_history"
+    volumes:
+      # Mount the user's exports directory at /exports inside the
+      # container. Override at runtime with `-v <path>:/exports:ro`
+      # via the Makefile, or drop files into ./exports/ in the project.
+      - ./exports:/exports:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    # `command:` is set per invocation by `docker compose run --rm ingest <cmd>`.
+
+  psql:
+    profiles: ["tools"]
+    image: postgis/postgis:16-3.4
+    environment: *db-env
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["psql", "-h", "db", "-U", "locuser", "-d", "location_history"]
+
+volumes:
+  pgdata:

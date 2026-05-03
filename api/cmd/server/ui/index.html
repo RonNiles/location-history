@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Location History</title>
+
+  <!-- MapLibre GL JS, served from this server (vendored under
+       /vendor/). Pinned to v4.7.1. The CSS is required for popups
+       and controls; the JS pulls in the WebGL renderer. -->
+  <link href="vendor/maplibre-gl.css" rel="stylesheet" />
+  <script src="vendor/maplibre-gl.js"></script>
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<aside id="sidebar">
+  <header class="sidebar-header">
+    <h1>Location <span class="amp">&amp;</span> History</h1>
+    <p class="status" id="status">Loading…</p>
+  </header>
+
+  <section class="panel">
+    <h2>Date range</h2>
+    <div class="date-row">
+      <label>
+        <span>from</span>
+        <input type="date" id="date-start" />
+      </label>
+      <label>
+        <span>to</span>
+        <input type="date" id="date-end" />
+      </label>
+    </div>
+    <div class="quick-ranges">
+      <button data-range="30d">30d</button>
+      <button data-range="90d">90d</button>
+      <button data-range="1y">1y</button>
+      <button data-range="all">all</button>
+    </div>
+    <div class="coverage-strip" id="coverage-strip">
+      <svg id="coverage-svg" preserveAspectRatio="none"></svg>
+      <div class="coverage-axis" id="coverage-axis"></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Layers</h2>
+    <ul class="layer-list">
+      <li>
+        <label>
+          <input type="checkbox" id="layer-visits" checked />
+          <span class="swatch" style="background: var(--c-visit);"></span>
+          <span>Visits</span>
+          <span class="count" id="count-visits">—</span>
+        </label>
+      </li>
+      <li>
+        <label>
+          <input type="checkbox" id="layer-activities" checked />
+          <span class="swatch" style="background: var(--c-walking);"></span>
+          <span>Activities</span>
+          <span class="count" id="count-activities">—</span>
+        </label>
+      </li>
+      <li>
+        <label>
+          <input type="checkbox" id="layer-signals" />
+          <span class="swatch" style="background: var(--c-signal);"></span>
+          <span>Raw signals <em>(zoom 13+)</em></span>
+          <span class="count" id="count-signals">—</span>
+        </label>
+      </li>
+      <li>
+        <label>
+          <input type="checkbox" id="layer-heatmap" />
+          <span class="swatch" style="background: linear-gradient(90deg, transparent, var(--c-heat));"></span>
+          <span>Heatmap</span>
+        </label>
+      </li>
+    </ul>
+  </section>
+
+  <section class="panel">
+    <h2>Tools</h2>
+    <button id="btn-radius" class="tool-btn">
+      Radius search…
+    </button>
+    <p class="tool-hint" id="radius-hint" hidden>
+      Click anywhere on the map to set the search center.
+    </p>
+    <div class="radius-controls" id="radius-controls" hidden>
+      <label>
+        <span>radius</span>
+        <input type="number" id="radius-m" value="200" min="10" max="100000" step="10" />
+        <span class="unit">m</span>
+      </label>
+      <button id="btn-radius-cancel" class="ghost">cancel</button>
+    </div>
+  </section>
+
+  <section class="panel results" id="results-panel" hidden>
+    <h2>Results <span class="count" id="results-count">—</span></h2>
+    <div id="results-list"></div>
+  </section>
+
+  <footer class="sidebar-footer">
+    <a href="/health" target="_blank">api</a> · 
+    map © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>
+  </footer>
+</aside>
+
+<main id="map"></main>
+
+<!-- Hover popup template — managed by app.js, kept in DOM for simple
+     access. -->
+<div id="hover-popup" hidden></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

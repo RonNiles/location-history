@@ -1,0 +1,20 @@
+# Optional override that exposes Postgres on 127.0.0.1:5432.
+# Use only when you need a desktop tool to connect directly.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.expose.yml up -d
+#
+# Or via the convenience target:
+#
+#   make db-expose
+#
+# Stop the exposed mode and return to private with:
+#
+#   make db-private
+#
+# Note: switching modes restarts the db container. Postgres data
+# persists in the pgdata volume so this is safe; in-flight queries
+# will be terminated.
+services:
+  db:
+    ports:
+      - "127.0.0.1:5432:5432"

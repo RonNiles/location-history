@@ -1,0 +1,16 @@
+# DB
+psycopg[binary]==3.2.3
+sqlalchemy==2.0.36
+geoalchemy2==0.16.0
+alembic==1.14.0
+
+# Streaming JSON parser
+ijson==3.3.0
+
+# CLI / nice progress bars
+typer==0.13.1
+rich==13.9.4
+
+# Date parsing — Google's timestamps are ISO8601 with Z, but
+# python-dateutil handles edge cases gracefully.
+python-dateutil==2.9.0.post0
