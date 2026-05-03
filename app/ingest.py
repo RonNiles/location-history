@@ -242,26 +242,59 @@ class Dispatch:
     kind: str  # 'position' | 'activity' | 'wifi' | 'unknown'
     position: Optional[RawSignalRow] = None
     activity: Optional[ActivityRecordRow] = None
+    unknown: Optional["UnknownRow"] = None
 
 
 def classify_raw_signal(record: dict) -> Dispatch:
     """
-    A rawSignals[] entry is one of three kinds, distinguished by which
-    top-level key is present:
+    A rawSignals[] entry is typically one of three kinds, distinguished
+    by which top-level key is present:
       * position       -> a GPS/WiFi-derived location fix
       * activityRecord -> sensor inference of motion type, no location
       * wifiScan       -> raw nearby APs, no usable location
-    Anything else is 'unknown' and gets dropped with a counter bump.
+
+    Anything else is 'unknown' and gets captured in `unknown_records`
+    so we can investigate and add a handler later, rather than silently
+    dropping data. This insurance has paid for itself before.
     """
     if "position" in record or "rawSignal" in record:
         rs = extract_position(record)
-        return Dispatch(kind="position", position=rs) if rs else Dispatch(kind="unknown")
+        if rs:
+            return Dispatch(kind="position", position=rs)
+        # Malformed position — capture as unknown.
+        return Dispatch(
+            kind="unknown",
+            unknown=UnknownRow(
+                source_array="rawSignals",
+                shape_hint=_shape_hint(record),
+                raw=to_native(record),
+                dedup_key=dedup_key("unknown_raw_position", _shape_hint(record), repr(record)[:200]),
+            ),
+        )
     if "activityRecord" in record:
         ar = extract_activity_record(record)
-        return Dispatch(kind="activity", activity=ar) if ar else Dispatch(kind="unknown")
+        if ar:
+            return Dispatch(kind="activity", activity=ar)
+        return Dispatch(
+            kind="unknown",
+            unknown=UnknownRow(
+                source_array="rawSignals",
+                shape_hint=_shape_hint(record),
+                raw=to_native(record),
+                dedup_key=dedup_key("unknown_raw_activity", _shape_hint(record), repr(record)[:200]),
+            ),
+        )
     if "wifiScan" in record:
         return Dispatch(kind="wifi")
-    return Dispatch(kind="unknown")
+    return Dispatch(
+        kind="unknown",
+        unknown=UnknownRow(
+            source_array="rawSignals",
+            shape_hint=_shape_hint(record),
+            raw=to_native(record),
+            dedup_key=dedup_key("unknown_raw", _shape_hint(record), repr(record)[:200]),
+        ),
+    )
 
 
 def extract_position(record: dict) -> Optional[RawSignalRow]:
@@ -366,6 +399,206 @@ def extract_activity_record(record: dict) -> Optional[ActivityRecordRow]:
         probables=probables,
         raw=to_native(record),
         dedup_key=dedup_key("activity_record", ts.isoformat(), top_type or ""),
+    )
+
+
+@dataclass
+class TimelineMemoryRow:
+    start_ts: datetime
+    end_ts: datetime
+    title: Optional[str]
+    kind: Optional[str]
+    place_ids: list[str]   # ordered, may contain duplicates
+    raw: dict
+    dedup_key: bytes
+
+
+@dataclass
+class UnknownRow:
+    """A record we couldn't classify. We store the whole thing for
+    later forensics. `shape_hint` is a comma-joined list of the
+    record's top-level keys, useful for grouping in queries like:
+        SELECT shape_hint, count(*) FROM unknown_records GROUP BY 1;
+    """
+    source_array: str  # 'rawSignals' | 'semanticSegments' | 'other'
+    shape_hint: Optional[str]
+    raw: dict
+    dedup_key: bytes
+
+
+# Result of classifying a semanticSegments[] entry. Mirrors the
+# Dispatch type used for rawSignals[].
+@dataclass
+class SegmentDispatch:
+    kind: str  # 'segment' | 'memory' | 'unknown'
+    segment: Optional["SegmentRow"] = None
+    memory: Optional[TimelineMemoryRow] = None
+    unknown: Optional[UnknownRow] = None
+
+
+def _shape_hint(record: dict) -> str:
+    """Best-effort fingerprint of a record's structure: comma-joined
+    sorted top-level keys, capped at 200 chars."""
+    if not isinstance(record, dict):
+        return type(record).__name__
+    keys = sorted(record.keys())
+    s = ",".join(keys)
+    return s[:200]
+
+
+def extract_timeline_memory(record: dict) -> Optional[TimelineMemoryRow]:
+    """
+    Pull a TimelineMemoryRow out of a semanticSegments[] entry that
+    carries a `timelineMemory` field. The structure across export
+    versions varies; we try several common shapes.
+
+    Typical shape (Google docs + observed exports):
+        {
+          "startTime": "...", "endTime": "...",
+          "timelineMemory": {
+            "trip": {
+              "destinations": [
+                {"identifier": {"placeId": "ChIJ..."}},
+                ...
+              ]
+            }
+          }
+        }
+
+    Older / variant shapes may use 'placeIds' as a flat list, or
+    'places' as the wrapper. We accept any of these.
+    """
+    tm = record.get("timelineMemory")
+    if not isinstance(tm, dict):
+        return None
+    start_ts = parse_ts(record.get("startTime"))
+    end_ts = parse_ts(record.get("endTime"))
+    if start_ts is None or end_ts is None:
+        return None
+
+    # Walk the memory structure looking for placeId values. We keep
+    # ordering as encountered, since it likely reflects trip order.
+    # We deduplicate consecutive duplicates to avoid double-counting
+    # when a record has both a direct `placeId` and a nested
+    # `identifier.placeId` referring to the same place.
+    place_ids: list[str] = []
+
+    def collect_place_ids(obj: Any) -> None:
+        if isinstance(obj, dict):
+            # If this node has a placeId AND/OR identifier.placeId,
+            # they're describing the same place — pick the first
+            # available and skip recursion through identifier.
+            pid = obj.get("placeId")
+            if not isinstance(pid, str):
+                ident = obj.get("identifier")
+                if isinstance(ident, dict):
+                    pid = ident.get("placeId")
+            if isinstance(pid, str):
+                place_ids.append(pid)
+                # Recurse into other keys but skip identifier (already consumed).
+                for k, v in obj.items():
+                    if k in ("placeId", "identifier"):
+                        continue
+                    collect_place_ids(v)
+                return
+            # No placeId at this node — recurse normally.
+            for v in obj.values():
+                collect_place_ids(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                collect_place_ids(item)
+
+    collect_place_ids(tm)
+
+    # Title: try a few common locations.
+    title = None
+    for path in (
+        ("trip", "title"),
+        ("title",),
+        ("name",),
+    ):
+        cur: Any = tm
+        for key in path:
+            cur = cur.get(key) if isinstance(cur, dict) else None
+            if cur is None:
+                break
+        if isinstance(cur, str) and cur:
+            title = cur
+            break
+
+    # Kind: 'trip' if there's a trip key, otherwise the first dict key.
+    kind = None
+    if isinstance(tm.get("trip"), dict):
+        kind = "trip"
+    else:
+        # Try whatever the first wrapper is.
+        for k in tm.keys():
+            if isinstance(tm[k], dict):
+                kind = k
+                break
+
+    return TimelineMemoryRow(
+        start_ts=start_ts,
+        end_ts=end_ts,
+        title=title,
+        kind=kind,
+        place_ids=place_ids,
+        raw=to_native(record),
+        dedup_key=dedup_key(
+            "memory",
+            start_ts.isoformat(),
+            end_ts.isoformat(),
+            ",".join(place_ids[:10]),  # first 10 places enough to disambiguate
+        ),
+    )
+
+
+def classify_segment(record: dict) -> SegmentDispatch:
+    """
+    Classify a semanticSegments[] entry into one of:
+      * 'segment' — visit / activity / bare timelinePath (the original cases)
+      * 'memory'  — timelineMemory record
+      * 'unknown' — anything else, captured in unknown_records
+
+    A record with both timelineMemory AND visit/activity is rare but
+    possible; we treat the timelineMemory as authoritative since it's
+    a higher-level abstraction.
+    """
+    if "timelineMemory" in record:
+        m = extract_timeline_memory(record)
+        if m is not None:
+            return SegmentDispatch(kind="memory", memory=m)
+        # Fall through: malformed memory, capture as unknown.
+        return SegmentDispatch(
+            kind="unknown",
+            unknown=UnknownRow(
+                source_array="semanticSegments",
+                shape_hint=_shape_hint(record),
+                raw=to_native(record),
+                dedup_key=dedup_key(
+                    "unknown_segment",
+                    record.get("startTime") or "",
+                    record.get("endTime") or "",
+                    _shape_hint(record),
+                ),
+            ),
+        )
+    s = extract_segment(record)
+    if s is not None:
+        return SegmentDispatch(kind="segment", segment=s)
+    return SegmentDispatch(
+        kind="unknown",
+        unknown=UnknownRow(
+            source_array="semanticSegments",
+            shape_hint=_shape_hint(record),
+            raw=to_native(record),
+            dedup_key=dedup_key(
+                "unknown_segment",
+                record.get("startTime") or "",
+                record.get("endTime") or "",
+                _shape_hint(record),
+            ),
+        ),
     )
 
 
@@ -539,7 +772,7 @@ class Writer:
                     source TEXT,
                     raw JSONB NOT NULL,
                     dedup_key BYTEA NOT NULL
-                ) ON COMMIT DROP;
+                ) ON COMMIT PRESERVE ROWS;
             """)
             cur.execute("""
                 CREATE TEMP TABLE stage_segments (
@@ -555,7 +788,7 @@ class Writer:
                     place_id TEXT,
                     raw JSONB NOT NULL,
                     dedup_key BYTEA NOT NULL
-                ) ON COMMIT DROP;
+                ) ON COMMIT PRESERVE ROWS;
             """)
             cur.execute("""
                 CREATE TEMP TABLE stage_activity_records (
@@ -565,7 +798,26 @@ class Writer:
                     probables JSONB NOT NULL,
                     raw JSONB NOT NULL,
                     dedup_key BYTEA NOT NULL
-                ) ON COMMIT DROP;
+                ) ON COMMIT PRESERVE ROWS;
+            """)
+            cur.execute("""
+                CREATE TEMP TABLE stage_timeline_memories (
+                    start_ts TIMESTAMPTZ NOT NULL,
+                    end_ts TIMESTAMPTZ NOT NULL,
+                    title TEXT,
+                    kind TEXT,
+                    raw JSONB NOT NULL,
+                    dedup_key BYTEA NOT NULL,
+                    place_ids TEXT[] NOT NULL
+                ) ON COMMIT PRESERVE ROWS;
+            """)
+            cur.execute("""
+                CREATE TEMP TABLE stage_unknown_records (
+                    source_array TEXT NOT NULL,
+                    shape_hint TEXT,
+                    raw JSONB NOT NULL,
+                    dedup_key BYTEA NOT NULL
+                ) ON COMMIT PRESERVE ROWS;
             """)
 
     def write_raw_signals(self, batch: list[RawSignalRow]) -> tuple[int, int]:
@@ -696,6 +948,109 @@ class Writer:
             cur.execute("TRUNCATE stage_activity_records")
         return (inserted, len(batch) - inserted)
 
+    def write_timeline_memories(self, batch: list[TimelineMemoryRow]) -> tuple[int, int]:
+        """
+        Inserts timeline_memories AND populates timeline_memory_places.
+
+        We do this in two steps because the place-list is keyed on
+        the new memory's id, which we only learn after the INSERT.
+        Postgres' RETURNING with a CTE makes this a single round-trip.
+        """
+        if not batch:
+            return (0, 0)
+        if self.dry_run:
+            return (len(batch), 0)
+
+        with self.conn.cursor() as cur:
+            with cur.copy(
+                "COPY stage_timeline_memories "
+                "(start_ts, end_ts, title, kind, raw, dedup_key, place_ids) "
+                "FROM STDIN"
+            ) as cp:
+                for m in batch:
+                    cp.write_row((
+                        m.start_ts,
+                        m.end_ts,
+                        m.title,
+                        m.kind,
+                        Jsonb(m.raw),
+                        m.dedup_key,
+                        m.place_ids,  # psycopg adapts list -> ARRAY automatically
+                    ))
+            # Single CTE: insert memories returning their new ids,
+            # then explode the place_ids of newly-inserted rows into
+            # the join table. Importantly we only join with `inserted`
+            # (rows that were actually NEW), so re-imports don't
+            # duplicate join-table rows.
+            cur.execute("""
+                WITH inserted AS (
+                    INSERT INTO timeline_memories
+                        (start_ts, end_ts, title, kind, raw, dedup_key)
+                    SELECT start_ts, end_ts, title, kind, raw, dedup_key
+                    FROM stage_timeline_memories
+                    ON CONFLICT (dedup_key) DO NOTHING
+                    RETURNING id, dedup_key
+                ),
+                joined AS (
+                    SELECT i.id AS memory_id, p.place_id, p.ord
+                    FROM inserted i
+                    JOIN stage_timeline_memories s USING (dedup_key)
+                    CROSS JOIN LATERAL unnest(s.place_ids) WITH ORDINALITY
+                        AS p(place_id, ord)
+                ),
+                place_inserts AS (
+                    INSERT INTO timeline_memory_places (memory_id, place_id, ord)
+                    SELECT memory_id, place_id, ord::int FROM joined
+                    ON CONFLICT DO NOTHING
+                    RETURNING memory_id
+                )
+                SELECT count(*) FROM inserted
+            """)
+            inserted = cur.fetchone()[0]
+            cur.execute("TRUNCATE stage_timeline_memories")
+        return (inserted, len(batch) - inserted)
+
+    def write_unknown_records(self, batch: list[UnknownRow]) -> tuple[int, int]:
+        if not batch:
+            return (0, 0)
+        if self.dry_run:
+            return (len(batch), 0)
+
+        with self.conn.cursor() as cur:
+            with cur.copy(
+                "COPY stage_unknown_records "
+                "(source_array, shape_hint, raw, dedup_key) "
+                "FROM STDIN"
+            ) as cp:
+                for u in batch:
+                    cp.write_row((
+                        u.source_array,
+                        u.shape_hint,
+                        Jsonb(u.raw),
+                        u.dedup_key,
+                    ))
+            cur.execute("""
+                INSERT INTO unknown_records
+                    (source_array, shape_hint, raw, dedup_key)
+                SELECT source_array, shape_hint, raw, dedup_key
+                FROM stage_unknown_records
+                ON CONFLICT (dedup_key) DO NOTHING
+            """)
+            inserted = cur.rowcount
+            cur.execute("TRUNCATE stage_unknown_records")
+        return (inserted, len(batch) - inserted)
+
+    def refresh_places(self) -> int:
+        """Recompute every place's centroid + visit_count + first/last_seen
+        from current segments. Preserves user_label. Returns row count
+        affected."""
+        if self.dry_run:
+            return 0
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT refresh_places()")
+            cur.execute("SELECT count(*) FROM places")
+            return cur.fetchone()[0]
+
 
 # --------------------------------------------------------------------------
 # Top-level run
@@ -752,11 +1107,13 @@ def main(
 
         # ---- Phase A: rawSignals ----
         # Each entry is one of: position / activityRecord / wifiScan /
-        # something we don't recognize. We route accordingly and keep
-        # named counters so the per-kind breakdown is informative.
+        # something we don't recognize. The first three go to their
+        # respective tables; unknowns are captured in unknown_records
+        # for later inspection rather than silently dropped.
         rs_inserted = rs_skipped = 0
         ar_inserted = ar_skipped = 0
-        wifi_dropped = unknown_dropped = 0
+        unk_raw_inserted = 0
+        wifi_dropped = 0
         with Progress(
             SpinnerColumn(),
             TextColumn("[bold]rawSignals[/]"),
@@ -768,6 +1125,7 @@ def main(
             task = progress.add_task("rs", total=None)
             pos_batch: list[RawSignalRow] = []
             act_batch: list[ActivityRecordRow] = []
+            unk_raw_batch: list[UnknownRow] = []
 
             def flush_pos():
                 nonlocal rs_inserted, rs_skipped
@@ -785,6 +1143,13 @@ def main(
                     ar_skipped += skp
                     act_batch.clear()
 
+            def flush_unk_raw():
+                nonlocal unk_raw_inserted
+                if unk_raw_batch:
+                    ins, _ = writer.write_unknown_records(unk_raw_batch)
+                    unk_raw_inserted += ins
+                    unk_raw_batch.clear()
+
             for record in iter_array_items(json_path, raw_signals_key):
                 d = classify_raw_signal(record)
                 if d.kind == "position" and d.position is not None:
@@ -797,12 +1162,15 @@ def main(
                         flush_act()
                 elif d.kind == "wifi":
                     wifi_dropped += 1
-                else:
-                    unknown_dropped += 1
+                elif d.kind == "unknown" and d.unknown is not None:
+                    unk_raw_batch.append(d.unknown)
+                    if len(unk_raw_batch) >= 1000:
+                        flush_unk_raw()
                 progress.update(task, advance=1)
 
             flush_pos()
             flush_act()
+            flush_unk_raw()
 
         if not dry_run:
             conn.commit()
@@ -816,67 +1184,121 @@ def main(
         )
         console.print(
             f"  wifiScan dropped: [dim]{wifi_dropped:,}[/]   "
-            f"unknown dropped: [red]{unknown_dropped:,}[/]"
+            f"unknown captured: [red]{unk_raw_inserted:,}[/]"
         )
 
         # ---- Phase B: semanticSegments ----
-        seg_inserted = seg_skipped = seg_failed = 0
+        # Each entry classifies as a segment (visit/activity), a
+        # timeline_memory (trip), or unknown (captured for forensics).
+        seg_inserted = seg_skipped = 0
+        mem_inserted = mem_skipped = 0
+        unk_seg_captured = 0
         with Progress(
             SpinnerColumn(),
-            TextColumn("[bold]segments[/]"),
+            TextColumn("[bold]semanticSegments[/]"),
             BarColumn(),
             TextColumn("{task.completed:,} processed"),
             TimeElapsedColumn(),
             console=console,
         ) as progress:
             task = progress.add_task("sg", total=None)
-            batch_s: list[SegmentRow] = []
-            for record in iter_array_items(json_path, segments_key):
-                row = extract_segment(record)
-                if row is None:
-                    seg_failed += 1
-                    progress.update(task, advance=1)
-                    continue
-                batch_s.append(row)
-                if len(batch_s) >= BATCH_SIZE:
-                    ins, skp = writer.write_segments(batch_s)
+            seg_batch: list[SegmentRow] = []
+            mem_batch: list[TimelineMemoryRow] = []
+            unk_batch: list[UnknownRow] = []
+
+            def flush_seg():
+                nonlocal seg_inserted, seg_skipped
+                if seg_batch:
+                    ins, skp = writer.write_segments(seg_batch)
                     seg_inserted += ins
                     seg_skipped += skp
-                    batch_s.clear()
+                    seg_batch.clear()
+
+            def flush_mem():
+                nonlocal mem_inserted, mem_skipped
+                if mem_batch:
+                    ins, skp = writer.write_timeline_memories(mem_batch)
+                    mem_inserted += ins
+                    mem_skipped += skp
+                    mem_batch.clear()
+
+            def flush_unk():
+                nonlocal unk_seg_captured
+                if unk_batch:
+                    ins, _ = writer.write_unknown_records(unk_batch)
+                    unk_seg_captured += ins
+                    unk_batch.clear()
+
+            for record in iter_array_items(json_path, segments_key):
+                d = classify_segment(record)
+                if d.kind == "segment" and d.segment is not None:
+                    seg_batch.append(d.segment)
+                    if len(seg_batch) >= BATCH_SIZE:
+                        flush_seg()
+                elif d.kind == "memory" and d.memory is not None:
+                    mem_batch.append(d.memory)
+                    # Memories are far less numerous than segments;
+                    # smaller batch is fine.
+                    if len(mem_batch) >= 1000:
+                        flush_mem()
+                elif d.kind == "unknown" and d.unknown is not None:
+                    unk_batch.append(d.unknown)
+                    if len(unk_batch) >= 1000:
+                        flush_unk()
                 progress.update(task, advance=1)
-            if batch_s:
-                ins, skp = writer.write_segments(batch_s)
-                seg_inserted += ins
-                seg_skipped += skp
+
+            flush_seg()
+            flush_mem()
+            flush_unk()
 
         if not dry_run:
             conn.commit()
         console.print(
-            f"  inserted: [green]{seg_inserted:,}[/]  "
-            f"skipped (dup): [yellow]{seg_skipped:,}[/]  "
-            f"unparseable: [red]{seg_failed:,}[/]"
+            f"  segments:           inserted [green]{seg_inserted:,}[/]  "
+            f"dup [yellow]{seg_skipped:,}[/]"
         )
+        console.print(
+            f"  timeline_memories:  inserted [green]{mem_inserted:,}[/]  "
+            f"dup [yellow]{mem_skipped:,}[/]"
+        )
+        console.print(
+            f"  unknown captured:   [red]{unk_seg_captured:,}[/]  "
+            f"(see unknown_records table)"
+        )
+
+        # ---- refresh_places ----
+        # Now that all segments are loaded, recompute the places
+        # aggregation. Cheap; one SQL function call.
+        if not dry_run:
+            n_places = writer.refresh_places()
+            conn.commit()
+            console.print(f"  places refreshed:   [green]{n_places:,}[/]")
 
         # Finalize audit row
         if run_id is not None and not dry_run:
             with conn.cursor() as cur:
                 cur.execute(
                     """UPDATE import_runs SET
-                           finished_at = now(),
-                           raw_signals_inserted      = %s,
-                           raw_signals_skipped       = %s,
-                           segments_inserted         = %s,
-                           segments_skipped          = %s,
-                           activity_records_inserted = %s,
-                           activity_records_skipped  = %s,
-                           wifi_scans_dropped        = %s,
-                           unknown_records_dropped   = %s
+                           finished_at                 = now(),
+                           raw_signals_inserted        = %s,
+                           raw_signals_skipped         = %s,
+                           segments_inserted           = %s,
+                           segments_skipped            = %s,
+                           activity_records_inserted   = %s,
+                           activity_records_skipped    = %s,
+                           wifi_scans_dropped          = %s,
+                           timeline_memories_inserted  = %s,
+                           timeline_memories_skipped   = %s,
+                           unknown_records_captured    = %s,
+                           unknown_records_dropped     = 0
                        WHERE id = %s""",
                     (
                         rs_inserted, rs_skipped,
                         seg_inserted, seg_skipped,
                         ar_inserted, ar_skipped,
-                        wifi_dropped, unknown_dropped,
+                        wifi_dropped,
+                        mem_inserted, mem_skipped,
+                        unk_raw_inserted + unk_seg_captured,
                         run_id,
                     ),
                 )

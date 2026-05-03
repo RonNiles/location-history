@@ -26,6 +26,8 @@ COMPOSE_RUN := $(COMPOSE) run --rm
         stats coverage \
         api-test api-rebuild api-logs api-shell \
         db-expose db-private \
+        places places-unlabeled places-labeled place-show place-label place-unlabel place-search \
+        unknowns \
         reset
 
 help:
@@ -51,6 +53,15 @@ help:
 	@echo "Inspect:"
 	@echo "  make stats                - quick row counts and date span"
 	@echo "  make coverage             - daily coverage summary"
+	@echo "  make unknowns             - inspect unrecognized records (forensics)"
+	@echo "Places:"
+	@echo "  make places                       - top places by visits"
+	@echo "  make places-unlabeled             - places without a label, top by visits"
+	@echo "  make places-labeled               - places that have a user label"
+	@echo "  make place-show ID=ChIJ...        - full detail for one place"
+	@echo "  make place-label ID=... NAME=...  - set a user label"
+	@echo "  make place-unlabel ID=...         - clear a user label"
+	@echo "  make place-search Q=foo           - substring-search labels"
 	@echo "Testing:"
 	@echo "  make api-test             - run Go unit tests on the host"
 	@echo "Configuration:"
@@ -157,6 +168,53 @@ coverage:
 	     count(*) FILTER (WHERE has_segments) AS with_segments, \
 	     min(day) AS first_day, max(day) AS last_day \
 	   FROM daily_coverage;"
+
+# ---- Places (CLI labeling) ----
+
+# All `place-*` and `places*` targets run the python CLI inside the
+# ingest container. The container is rebuilt on demand via compose.
+# We pass --tty so rich's tables render with proper widths and colors.
+
+places:
+	$(COMPOSE) run --rm -T ingest python -m app.places list
+
+places-unlabeled:
+	$(COMPOSE) run --rm -T ingest python -m app.places list --unlabeled
+
+places-labeled:
+	$(COMPOSE) run --rm -T ingest python -m app.places list --labeled
+
+# Set ID=<place_id> when calling these
+ID   ?=
+NAME ?=
+Q    ?=
+
+place-show:
+	@if [ -z "$(ID)" ]; then echo 'Usage: make place-show ID=ChIJ...'; exit 2; fi
+	$(COMPOSE) run --rm -T ingest python -m app.places show "$(ID)"
+
+place-label:
+	@if [ -z "$(ID)" ] || [ -z "$(NAME)" ]; then \
+	  echo 'Usage: make place-label ID=ChIJ... NAME="Mom'\''s house"'; exit 2; fi
+	$(COMPOSE) run --rm -T ingest python -m app.places label "$(ID)" "$(NAME)"
+
+place-unlabel:
+	@if [ -z "$(ID)" ]; then echo 'Usage: make place-unlabel ID=ChIJ...'; exit 2; fi
+	$(COMPOSE) run --rm -T ingest python -m app.places unlabel "$(ID)"
+
+place-search:
+	@if [ -z "$(Q)" ]; then echo 'Usage: make place-search Q=substring'; exit 2; fi
+	$(COMPOSE) run --rm -T ingest python -m app.places search "$(Q)"
+
+# ---- Unknowns (forensics) ----
+
+unknowns:
+	@$(COMPOSE) exec -T db psql -U locuser -d location_history -c \
+	  "SELECT source_array, shape_hint, count(*) AS n \
+	   FROM unknown_records \
+	   GROUP BY 1, 2 \
+	   ORDER BY n DESC \
+	   LIMIT 50;"
 
 # ---- Testing ----
 

@@ -403,6 +403,69 @@ a single cinnabar accent for selected/active states. The goal is a
 calm, instrumental feel for long browsing sessions — the visual
 opposite of a marketing dashboard.
 
+## Places
+
+Google's `placeId` strings are promoted to a first-class `places`
+table at the end of every ingest run (the SQL function
+`refresh_places()` aggregates over `segments` where
+`segment_type='visit' AND place_id IS NOT NULL`). Each place row
+carries a derived centroid, `visit_count`, `total_seconds`,
+`first_seen` / `last_seen`, plus an optional `user_label` that you
+set yourself.
+
+The `user_label` column is **preserved across re-imports** — only
+the derived fields are updated by `refresh_places()`.
+
+### Labeling places from the CLI
+
+```bash
+make places                    # top places by visit count
+make places-unlabeled          # find places worth naming
+make place-show ID=ChIJ...     # full detail for one place
+make place-label ID=ChIJ... NAME="Mom's house"
+make place-unlabel ID=ChIJ...  # clear a label
+make place-search Q=ramen      # substring-search labels (uses trigram index)
+```
+
+A typical workflow:
+
+```bash
+make places-unlabeled          # see the places you visit most that aren't named
+make place-show ID=ChIJ...     # confirm it's the one you mean
+make place-label ID=ChIJ... NAME="The Italian place on 5th"
+```
+
+## Trips and timeline memories
+
+Google occasionally produces `timelineMemory` records — multi-day
+"trip" abstractions referencing a list of places. These are stored
+in the `timeline_memories` table, with the ordered list of places
+in `timeline_memory_places`. They reference (but don't duplicate)
+data already in `segments`.
+
+You can query them directly via psql for now; a `make trips` target
+will land in a future round once we know what views are useful.
+
+## Unknown records (forensics)
+
+Anything the importer can't classify is captured in
+`unknown_records` with a shape hint, instead of being silently
+dropped. This is insurance against future Google export changes
+introducing new record kinds — we capture them so we can add proper
+handling later without losing data.
+
+```bash
+make unknowns
+```
+
+shows the kinds and counts. If a particular kind warrants real
+handling, the `raw` JSONB column has the full record for
+inspection:
+
+```sql
+SELECT raw FROM unknown_records WHERE shape_hint = 'someNewKind' LIMIT 5;
+```
+
 ### What's next
 
 Possible Phase 4 directions, in roughly increasing order of effort:
