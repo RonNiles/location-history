@@ -52,7 +52,7 @@ console = Console()
 # Default pattern matches the three filename forms we know about.
 # Case-insensitive (Path.glob isn't, so we compile a regex too).
 DEFAULT_FILENAME_RE = re.compile(
-    r"^(location-history|timeline(?:\s*\(\d+\))?)\.json$",
+    r"^(location-history(?:-\d{4}-\d{2}-\d{2})?|timeline(?:\s*\(\d+\))?)\.json$",
     re.IGNORECASE,
 )
 

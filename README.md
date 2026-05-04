@@ -9,6 +9,12 @@ the API on `127.0.0.1:8000` (configurable via `.env`). Postgres has
 no host port by default; the Python ingest tools and `psql` shell
 run as one-shot containers on the same compose network.
 
+## Get your timeline from Android
+
+- Device Settings -> Location -> Location Services -> Timeline -> Export
+- Then bring it to your computer using some kind of file transfer (usb, Google Drive, etc.)
+- Keep them in a local directory on your computer. Their names should be Timeline.json, Timeline (2).json,...
+
 ## Prerequisites
 
 - Ubuntu 24 (or anything with Docker + Compose v2)

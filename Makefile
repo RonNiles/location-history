@@ -22,7 +22,7 @@ COMPOSE     := docker compose
 COMPOSE_RUN := $(COMPOSE) run --rm
 
 .PHONY: help up down build logs ps psql migrate downgrade \
-        probe ingest ingest-dir dry-run dry-run-dir \
+        probe ingest ingest-dir dry-run dry-run-dir ingest-rebuild \
         stats coverage \
         api-test api-rebuild api-logs api-shell \
         db-expose db-private \
@@ -47,6 +47,7 @@ help:
 	@echo "Ingest (runs in container):"
 	@echo "  make probe JSON=...       - probe a JSON export's structure"
 	@echo "  make dry-run JSON=...     - parse without writing"
+	@echo "  make ingest-rebuild       - rebuild the ingest image (after editing app/*.py)"
 	@echo "  make ingest JSON=...      - ingest a single file into the DB"
 	@echo "  make ingest-dir DIR=...   - ingest every Timeline export under a dir"
 	@echo "  make dry-run-dir DIR=...  - dry-run all files under a dir"
@@ -99,6 +100,12 @@ api-logs:
 
 api-rebuild:
 	$(COMPOSE) up -d --build api
+
+# The ingest service is profile=tools and has no long-running command —
+# `up --build` would try to start it. Just rebuild the image so the
+# next `docker compose run --rm ingest ...` picks up source changes.
+ingest-rebuild:
+	$(COMPOSE) build ingest
 
 # ---- DB shell / migrations ----
 
