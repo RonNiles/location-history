@@ -31,6 +31,7 @@ export const API = {
   segments: (params) => get('/segments', params),
   signals:  (params) => get('/signals',  params),
   pointsNear: (params) => get('/points-near', params),
+  places:  (params) => get('/places', params || {}),
 };
 
 /** Format an RFC3339 string from a YYYY-MM-DD date input value. */

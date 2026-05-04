@@ -73,6 +73,7 @@
   --c-flying:       #6e3b8a;       /* violet */
   --c-unknown:      #777067;       /* warm gray */
   --c-signal:       #a13e2c;       /* rust */
+  --c-place:        #4a3a6e;       /* deep plum — distinct from visit indigo */
   --c-heat:         #a83b1f;
   --c-radius:       #b13b27;
 
@@ -377,6 +378,86 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------- radius timeline ---------- */
+
+/* Caption above each row of bars. */
+.tl-caption {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--c-ink-muted);
+  margin: 14px 0 6px;
+  font-style: italic;
+}
+.tl-caption:first-child { margin-top: 4px; }
+
+/* Row of columns. Each bar is its own button so it's keyboard-
+   reachable and the click target is generous. Each column's
+   padding-bottom reserves a strip for the absolutely-positioned
+   label, so the bar (flex-end, normal flow) sits above the label
+   instead of overlapping it. */
+.tl-row {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  height: 78px;
+  border-bottom: 1px solid var(--c-rule);
+  margin-bottom: 4px;
+}
+.tl-row.tl-days {
+  height: 60px;
+}
+
+.tl-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: stretch;
+  background: transparent;
+  border: 0;
+  padding: 0 0 22px;
+  cursor: pointer;
+  position: relative;
+  font-family: var(--f-mono);
+}
+.tl-row.tl-days .tl-col {
+  padding-bottom: 14px;
+}
+.tl-col:disabled { cursor: default; }
+.tl-col:focus { outline: 1px dotted var(--c-ink-dim); outline-offset: 1px; }
+
+.tl-bar {
+  display: block;
+  background: var(--c-visit);
+  width: 100%;
+  min-height: 1px;
+}
+.tl-col:not(:disabled):hover .tl-bar {
+  background: var(--c-accent);
+}
+.tl-col.active .tl-bar {
+  background: var(--c-accent);
+}
+
+.tl-label {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 8px;
+  color: var(--c-ink-muted);
+  letter-spacing: 0.02em;
+  white-space: pre-line;       /* Jan\n2024 */
+  line-height: 1.1;
+  pointer-events: none;
+}
+.tl-col.active .tl-label {
+  color: var(--c-accent);
+}
+.tl-day-label { font-size: 8px; }
+
 /* ---------- footer ---------- */
 
 .sidebar-footer {
@@ -412,6 +493,7 @@ body {
 #hover-popup .h { font-family: var(--f-serif); font-style: italic; font-size: 13px; }
 #hover-popup .h.act { color: var(--c-walking); }
 #hover-popup .h.visit { color: var(--c-visit); }
+#hover-popup .h.place { color: var(--c-place); font-style: normal; font-weight: 600; }
 #hover-popup .meta { color: var(--c-ink-dim); font-size: 10px; }
 #hover-popup hr {
   border: none;

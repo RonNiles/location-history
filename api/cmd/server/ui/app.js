@@ -127,10 +127,12 @@ const els = {
   layerVisits:   document.getElementById('layer-visits'),
   layerActivities: document.getElementById('layer-activities'),
   layerSignals:  document.getElementById('layer-signals'),
+  layerPlaces:   document.getElementById('layer-places'),
   layerHeatmap:  document.getElementById('layer-heatmap'),
   countVisits:   document.getElementById('count-visits'),
   countActivities: document.getElementById('count-activities'),
   countSignals:  document.getElementById('count-signals'),
+  countPlaces:   document.getElementById('count-places'),
   btnRadius:     document.getElementById('btn-radius'),
   radiusHint:    document.getElementById('radius-hint'),
   radiusControls: document.getElementById('radius-controls'),
@@ -153,6 +155,8 @@ const state = {
   radiusCircleId: null,
   lastRadiusCenter: null,  // [lng, lat] of last radius search
   lastRadiusMeters: null,
+  lastRadiusHits: [],      // most-recent hits, used by timeline drill-down
+  activeRadiusMonth: null, // YYYY-MM currently expanded into days, if any
   // We re-fetch segments whenever the date range changes; stash a
   // generation counter to ignore stale responses.
   segmentsGen: 0,
@@ -287,6 +291,35 @@ map.on('load', async () => {
     },
   }, 'activities-line');  // place beneath the segment layers
 
+  // Places — labeled spots and frequently-visited unlabeled ones.
+  // We deliberately don't render text labels on the map: that would
+  // require loading a glyph stack (MapLibre's symbol layer needs
+  // `glyphs` on the style root) which conflicts with our offline-
+  // first design. Hover popups carry the label instead.
+  map.addSource('places', { type: 'geojson', data: empty });
+  map.addLayer({
+    id: 'places-circle',
+    type: 'circle',
+    source: 'places',
+    paint: {
+      // Size by sqrt of visits so a place visited 100x isn't 10x
+      // bigger than one visited 1x. Clamp the floor so a brand-new
+      // place is still visible.
+      'circle-radius': [
+        'interpolate', ['linear'],
+        ['sqrt', ['max', ['coalesce', ['get', 'visits'], 0], 1]],
+        1,  4,
+        4,  6,
+        10, 9,
+        30, 13,
+      ],
+      'circle-color':         cssVar('--c-paper'),
+      'circle-stroke-color':  cssVar('--c-place'),
+      'circle-stroke-width':  2,
+      'circle-opacity':       0.95,
+    },
+  });
+
   // Radius indicator (filled circle layer driven by GeoJSON Polygon).
   map.addLayer({
     id: 'radius-fill',
@@ -311,6 +344,7 @@ map.on('load', async () => {
   // Hover popups for visits and activities.
   attachHover('visits-circle', renderVisitPopup);
   attachHover('activities-line', renderActivityPopup);
+  attachHover('places-circle', renderPlacePopup);
 
   // Map click → if in radius mode, do the search.
   map.on('click', onMapClick);
@@ -372,6 +406,32 @@ function renderActivityPopup(f) {
   ];
   if (p.dist_m != null) lines.push(`<div class="meta">distance ${fmtMeters(+p.dist_m)}</div>`);
   if (p.conf != null) lines.push(`<div class="meta">conf ${(+p.conf).toFixed(2)}</div>`);
+  return lines.join('');
+}
+
+function renderPlacePopup(f) {
+  const p = f.properties || {};
+  // The label gets the visual emphasis. Unlabeled places fall back
+  // to the place_id, which is at least diagnostic.
+  const head = p.label
+    ? `<div class="h place">${escapeHTML(p.label)}</div>`
+    : `<div class="h place" style="color:var(--c-ink-dim);font-style:italic;">unlabeled place</div>`;
+  const lines = [head];
+  lines.push(`<div class="meta">${(+p.visits || 0).toLocaleString()} visits`);
+  if (p.total_seconds) {
+    lines.push(` · ${fmtDuration((+p.total_seconds) * 1000)} total`);
+  }
+  lines.push(`</div>`);
+  if (p.first_seen) {
+    const first = p.first_seen.slice(0, 10);
+    const last = (p.last_seen || '').slice(0, 10);
+    lines.push(`<div class="meta">${first}${last && last !== first ? ' → ' + last : ''}</div>`);
+  }
+  if (!p.label && p.id) {
+    // Show place_id only if there's no friendly label, so users can
+    // copy it for `make place-label ID=...`
+    lines.push(`<hr/><div class="meta" style="user-select:text;font-size:9px;">${escapeHTML(p.id)}</div>`);
+  }
   return lines.join('');
 }
 
@@ -442,7 +502,31 @@ async function initialLoad() {
 
   // First segments fetch.
   await loadSegments();
+  // Places are independent of date range — load once. They are
+  // refreshed only when the user toggles the layer back on after
+  // an ingest, which they can do from the sidebar.
+  loadPlaces();
   setStatus(`${state.extent.start?.slice(0,10) ?? '?'} → ${state.extent.end?.slice(0,10) ?? '?'}`);
+}
+
+// ----------------------- places loading -----------------------
+
+async function loadPlaces() {
+  if (!els.layerPlaces.checked) {
+    els.countPlaces.textContent = '—';
+    return;
+  }
+  els.countPlaces.textContent = '…';
+  let data;
+  try {
+    data = await API.places({ limit: 5000 });
+  } catch (e) {
+    console.warn('places', e);
+    els.countPlaces.textContent = '!';
+    return;
+  }
+  map.getSource('places').setData(data);
+  els.countPlaces.textContent = (data.count || 0).toLocaleString();
 }
 
 // ----------------------- segment loading -----------------------
@@ -601,6 +685,10 @@ els.layerSignals.addEventListener('change', () => {
   setLayerVisible('signals-circle', els.layerSignals.checked);
   if (els.layerSignals.checked) loadSignals();
 });
+els.layerPlaces.addEventListener('change', () => {
+  setLayerVisible('places-circle', els.layerPlaces.checked);
+  if (els.layerPlaces.checked) loadPlaces();
+});
 els.layerHeatmap.addEventListener('change', () => {
   setLayerVisible('heatmap', els.layerHeatmap.checked);
 });
@@ -620,6 +708,8 @@ els.btnRadiusCancel.addEventListener('click', clearRadius);
 
 function clearRadius() {
   state.radiusMode = false;
+  state.lastRadiusHits = [];
+  state.activeRadiusMonth = null;
   els.btnRadius.classList.remove('active');
   els.btnRadius.textContent = 'Radius search…';
   els.radiusHint.hidden = true;
@@ -640,6 +730,8 @@ async function onMapClick(e) {
   // Stash the search center for click-to-jump in the results panel.
   state.lastRadiusCenter = [lng, lat];
   state.lastRadiusMeters = radiusM;
+  // A new search resets timeline drill-down state.
+  state.activeRadiusMonth = null;
 
   // Draw the circle.
   map.getSource('radius').setData({
@@ -680,62 +772,216 @@ function renderResults(resp) {
     setStatus('No matches');
     return;
   }
-  // Group by year-month for readability.
-  const grouped = new Map();
-  for (const h of seg) {
-    const ym = new Date(h.start_ms).toISOString().slice(0,7);
-    if (!grouped.has(ym)) grouped.set(ym, []);
-    grouped.get(ym).push(h);
-  }
-  // Sort groups newest first.
-  const months = [...grouped.keys()].sort().reverse();
-  for (const ym of months) {
-    const h2 = document.createElement('h3');
-    h2.textContent = ym;
-    h2.style.fontFamily = 'var(--f-serif)';
-    h2.style.fontSize = '13px';
-    h2.style.fontWeight = '600';
-    h2.style.color = 'var(--c-ink-dim)';
-    h2.style.margin = '14px 0 4px';
-    h2.style.borderBottom = '1px solid var(--c-rule)';
-    list.appendChild(h2);
-    for (const hit of grouped.get(ym)) {
-      list.appendChild(renderHitRow(hit));
-    }
-  }
+
+  // Stash the hits so the timeline can re-bucket them when the
+  // user clicks between months.
+  state.lastRadiusHits = seg;
+
+  renderRadiusTimeline(seg);
   setStatus(`${seg.length + raw.length} matches`);
 }
 
-function renderHitRow(hit) {
-  const div = document.createElement('div');
-  div.className = 'result';
-  const dur = hit.end_ms - hit.start_ms;
-  const date = new Date(hit.start_ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  const time = new Date(hit.start_ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-  div.innerHTML = `
-    <span class="when">${date}<br/>${time}</span>
-    <span class="what">${hit.type === 'visit' ? 'visit' : (hit.act || 'activity').toLowerCase().replace(/_/g,' ')}
-      <br/><span style="font-style:normal;font-family:var(--f-mono);font-size:10px;color:var(--c-ink-dim);">${fmtDuration(dur)}</span>
-    </span>
-    <span class="dist">${fmtMeters(hit.min_dist_m)}</span>
-  `;
-  div.addEventListener('click', () => {
-    // Jump to the search center; this also adjusts the date range
-    // to bracket the hit so the segment becomes visible.
-    if (state.lastRadiusCenter) {
-      map.flyTo({ center: state.lastRadiusCenter, zoom: 15 });
+// ---------- radius timeline (months ⇒ days) ----------
+
+// Build {ym: hit[]} and {ymd: hit[]} maps from a flat hit list.
+function bucketHits(hits) {
+  const byMonth = new Map();
+  const byDay = new Map();
+  for (const h of hits) {
+    const d = new Date(h.start_ms);
+    const ym  = d.toISOString().slice(0, 7);
+    const ymd = d.toISOString().slice(0, 10);
+    if (!byMonth.has(ym)) byMonth.set(ym, []);
+    byMonth.get(ym).push(h);
+    if (!byDay.has(ymd)) byDay.set(ymd, []);
+    byDay.get(ymd).push(h);
+  }
+  return { byMonth, byDay };
+}
+
+// Generate every YYYY-MM (or YYYY-MM-DD) string between two dates,
+// inclusive. Used to draw zero-bars for empty months/days so the
+// chart shows time density honestly rather than collapsing gaps.
+function eachMonth(fromYM, toYM) {
+  const [fy, fm] = fromYM.split('-').map(Number);
+  const [ty, tm] = toYM.split('-').map(Number);
+  const out = [];
+  let y = fy, m = fm;
+  while (y < ty || (y === ty && m <= tm)) {
+    out.push(`${y}-${String(m).padStart(2, '0')}`);
+    m++;
+    if (m > 12) { m = 1; y++; }
+  }
+  return out;
+}
+function eachDayOfMonth(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  // Last day of month: day 0 of next month.
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const out = [];
+  for (let d = 1; d <= last; d++) {
+    out.push(`${ym}-${String(d).padStart(2, '0')}`);
+  }
+  return out;
+}
+
+function renderRadiusTimeline(hits) {
+  const { byMonth, byDay } = bucketHits(hits);
+  const list = els.resultsList;
+  list.textContent = '';
+
+  // Month-level container.
+  const monthsWrap = document.createElement('div');
+  monthsWrap.className = 'tl-row';
+  list.appendChild(monthsWrap);
+
+  // Bracket the months. Show every month from earliest to latest
+  // hit, even if some are zero-count (so visual gaps mean something).
+  const ymKeys = [...byMonth.keys()].sort();
+  if (!ymKeys.length) return;
+  const allMonths = eachMonth(ymKeys[0], ymKeys[ymKeys.length - 1]);
+
+  // Find max count for bar scaling.
+  let maxMonth = 0;
+  for (const ym of allMonths) {
+    const n = (byMonth.get(ym) || []).length;
+    if (n > maxMonth) maxMonth = n;
+  }
+
+  // Caption.
+  const cap = document.createElement('div');
+  cap.className = 'tl-caption';
+  cap.textContent = `${hits.length} matches across ${allMonths.length} months. Click a month to expand.`;
+  list.insertBefore(cap, monthsWrap);
+
+  // Render month bars. Each is a column of (bar, label).
+  for (const ym of allMonths) {
+    const n = (byMonth.get(ym) || []).length;
+    const col = document.createElement('button');
+    col.className = 'tl-col tl-month';
+    col.dataset.ym = ym;
+    col.disabled = n === 0;
+    col.title = n === 0 ? `${ym}: no matches` : `${ym}: ${n} matches`;
+
+    const bar = document.createElement('span');
+    bar.className = 'tl-bar';
+    const h = maxMonth ? Math.max(1, Math.round((n / maxMonth) * 100)) : 0;
+    bar.style.height = `${h}%`;
+    if (n === 0) bar.style.opacity = '0.25';
+    col.appendChild(bar);
+
+    const lbl = document.createElement('span');
+    lbl.className = 'tl-label';
+    // Compact label: just MMM, with year shown only on Jan or first
+    // bar to avoid repetition.
+    const [yy, mm] = ym.split('-');
+    const [py] = (allMonths[allMonths.indexOf(ym) - 1] || '').split('-');
+    const mIdx = +mm - 1;
+    const monthShort = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][mIdx];
+    lbl.textContent = (mIdx === 0 || py !== yy) ? `${monthShort}\n${yy}` : monthShort;
+    col.appendChild(lbl);
+
+    col.addEventListener('click', () => {
+      if (n === 0) return;
+      // Toggle: clicking the active month closes the days row.
+      if (state.activeRadiusMonth === ym) {
+        state.activeRadiusMonth = null;
+        renderRadiusTimeline(state.lastRadiusHits);
+        return;
+      }
+      state.activeRadiusMonth = ym;
+      // Rerender to update the .active styling, then append days row.
+      // Use a focused render path that keeps the months element stable.
+      renderRadiusTimeline(state.lastRadiusHits);
+      // After rerender, the cols are new — find the matching one and
+      // add days row right under it.
+      renderDaysRow(state.lastRadiusHits, ym);
+    });
+
+    if (state.activeRadiusMonth === ym) {
+      col.classList.add('active');
     }
-    // Set the date range tightly around this hit so loadSegments
-    // pulls it in.
-    const day = new Date(hit.start_ms).toISOString().slice(0, 10);
-    const dayBefore = new Date(hit.start_ms - 86400000).toISOString().slice(0, 10);
-    const dayAfter = new Date(hit.end_ms + 86400000).toISOString().slice(0, 10);
-    els.dateStart.value = dayBefore;
-    els.dateEnd.value = dayAfter;
-    highlightQuickRange(null);
-    onDateRangeChange();
-  });
-  return div;
+    monthsWrap.appendChild(col);
+  }
+
+  // If a month was already active (e.g. a re-render after clicking
+  // a sibling), draw its days row.
+  if (state.activeRadiusMonth) {
+    renderDaysRow(hits, state.activeRadiusMonth);
+  }
+}
+
+function renderDaysRow(allHits, ym) {
+  const { byDay } = bucketHits(allHits);
+  const list = els.resultsList;
+
+  // Remove any existing days row
+  const existing = list.querySelector('.tl-row.tl-days');
+  if (existing) existing.remove();
+
+  const wrap = document.createElement('div');
+  wrap.className = 'tl-row tl-days';
+
+  const cap = document.createElement('div');
+  cap.className = 'tl-caption';
+  const monthHits = (allHits || []).filter(h =>
+    new Date(h.start_ms).toISOString().slice(0, 7) === ym
+  );
+  cap.textContent = `${ym}: ${monthHits.length} matches. Click a day to view it on the map.`;
+  list.appendChild(cap);
+  list.appendChild(wrap);
+
+  const days = eachDayOfMonth(ym);
+  let maxDay = 0;
+  for (const ymd of days) {
+    const n = (byDay.get(ymd) || []).length;
+    if (n > maxDay) maxDay = n;
+  }
+
+  for (const ymd of days) {
+    const n = (byDay.get(ymd) || []).length;
+    const col = document.createElement('button');
+    col.className = 'tl-col tl-day';
+    col.dataset.ymd = ymd;
+    col.disabled = n === 0;
+    col.title = n === 0 ? `${ymd}: no matches` : `${ymd}: ${n} matches`;
+
+    const bar = document.createElement('span');
+    bar.className = 'tl-bar';
+    const h = maxDay ? Math.max(1, Math.round((n / maxDay) * 100)) : 0;
+    bar.style.height = `${h}%`;
+    if (n === 0) bar.style.opacity = '0.2';
+    col.appendChild(bar);
+
+    const lbl = document.createElement('span');
+    lbl.className = 'tl-label tl-day-label';
+    // Sparse labels: 1, 5, 10, 15, 20, 25, 30. Keeps the row legible
+    // at sidebar width. The full date is always in the title tooltip.
+    const dayNum = +ymd.slice(-2);
+    if (dayNum === 1 || dayNum % 5 === 0) {
+      lbl.textContent = String(dayNum);
+    } else {
+      lbl.textContent = '';
+    }
+    col.appendChild(lbl);
+
+    col.addEventListener('click', () => {
+      if (n === 0) return;
+      // Set date range to just this day, and pan to the search
+      // center. The map's segments query will pick up everything
+      // we did that day (not just the radius hits) so you get the
+      // surrounding context.
+      els.dateStart.value = ymd;
+      els.dateEnd.value = ymd;
+      highlightQuickRange(null);
+      onDateRangeChange();
+      if (state.lastRadiusCenter) {
+        map.flyTo({ center: state.lastRadiusCenter, zoom: 15 });
+      }
+    });
+
+    wrap.appendChild(col);
+  }
 }
 
 // ------------- helpers: build a circle ring as lng/lat --------------
