@@ -6,19 +6,21 @@ import { CoverageStrip } from './coverage.js';
 
 // ------------------------------ map setup ------------------------------
 
-// MapLibre style with a single OSM raster source. We deliberately use
-// raster (not vector) tiles per the user's preference for simpler
-// setup and no API key. OSM's tile policy is fine for personal use
-// at this scale.
+// MapLibre style with a single OSM raster source. Tiles are
+// requested from our own /tiles endpoint, which proxies and caches
+// upstream OSM. This means:
+//   * We respect OSM's tile usage policy by only requesting each
+//     tile from them once (then caching).
+//   * Repeated visits to the same area are instant (filesystem read).
+//   * The browser's HTTP cache *also* caches them on top of that
+//     (Cache-Control: max-age=604800 set by the API).
 const MAP_STYLE = {
   version: 8,
   sources: {
     osm: {
       type: 'raster',
       tiles: [
-        'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
-        'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
-        'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        'tiles/{z}/{x}/{y}.png',
       ],
       tileSize: 256,
       attribution:

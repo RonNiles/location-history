@@ -10,12 +10,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/locationhistory/api/internal/httpx"
+	"github.com/locationhistory/api/internal/tiles"
 )
 
 // API holds shared dependencies passed to every handler.
 type API struct {
-	Pool   *pgxpool.Pool
-	Logger *slog.Logger
+	Pool      *pgxpool.Pool
+	Logger    *slog.Logger
+	TileCache *tiles.Cache // optional; nil disables /tiles
 }
 
 // Health checks that the DB pool is responsive. We deliberately ping

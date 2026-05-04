@@ -386,20 +386,56 @@ browser.
 
 ### Tiles
 
-The UI uses raster tiles directly from `tile.openstreetmap.org`
-(no signup, no API key). For personal-scale browsing this is well
-within OSM's tile usage policy. If you find yourself browsing very
-heavily and want to be polite, the simplest upgrade path is a
-self-hosted `tileserver-gl` with a regional MBTiles extract — only
-the tile URL in `app.js` changes.
+The UI doesn't fetch OSM tiles directly. Instead the API exposes a
+`/tiles/{z}/{x}/{y}.png` endpoint that proxies upstream and caches
+the bytes to disk:
+
+```
+browser  →  /tiles/14/2632/6334.png  →  api  →  hits disk cache?
+                                              ↳ yes: serve immediately
+                                              ↳ no:  fetch upstream,
+                                                     write to disk,
+                                                     serve
+```
+
+Why bother:
+
+- **Respect for OSM**: each tile is fetched from upstream at most
+  once (until eviction). OSM's tile usage policy explicitly asks
+  for this kind of caching.
+- **Speed**: warm-cache requests are a filesystem read — sub-millisecond.
+- **Offline-ish**: any region you've browsed before keeps working
+  even if upstream OSM is down or unreachable. The cache persists
+  in a Docker named volume across `make api-rebuild`.
+
+The cache lives at `/var/cache/tiles` inside the API container,
+backed by a Docker named volume (`tilecache`).
+
+```bash
+make tile-stats     # in-memory hits/misses + on-disk file count + size
+make tiles-clear    # nuke the cache
+```
+
+The `X-Cache` response header tells you what happened for each
+request: `hit`, `miss`, `stale-revalidated`, or `stale-fallback`
+(stale bytes served because upstream is down).
+
+**Configuring upstream.** Default is `tile.openstreetmap.org`; edit
+`.env` (see `.env.example`) to point at a different upstream like a
+self-hosted tileserver-gl. **Set `TILE_USER_AGENT` to identify your
+application** — OSM's tile usage policy requires it.
+
+**Rate limiting.** A token bucket (default 5 req/s, burst 20) caps
+how fast we hit upstream. Single-flight de-duplication ensures that
+multiple simultaneous browser requests for the same tile coalesce
+into one upstream fetch. Both are configurable via `.env`.
 
 ### Offline-friendly assets
 
 MapLibre GL JS, the maplibre CSS, and EB Garamond + JetBrains Mono
 fonts are all vendored under `api/cmd/server/ui/vendor/` and embedded
-into the binary. Once your machine has loaded the page once, the only
-external resource the UI needs is the OSM tile server itself; the
-rest works offline.
+into the binary. With the tile cache warmed for a region, the UI
+works fully offline for that region.
 
 ### Design
 

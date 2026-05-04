@@ -28,6 +28,7 @@ COMPOSE_RUN := $(COMPOSE) run --rm
         db-expose db-private \
         places places-unlabeled places-labeled place-show place-label place-unlabel place-search \
         unknowns \
+        tile-stats tiles-clear \
         reset
 
 help:
@@ -55,6 +56,8 @@ help:
 	@echo "  make stats                - quick row counts and date span"
 	@echo "  make coverage             - daily coverage summary"
 	@echo "  make unknowns             - inspect unrecognized records (forensics)"
+	@echo "  make tile-stats           - tile cache stats (hits / misses / bytes)"
+	@echo "  make tiles-clear          - delete all cached tiles (forces re-fetch)"
 	@echo "Places:"
 	@echo "  make places                       - top places by visits"
 	@echo "  make places-unlabeled             - places without a label, top by visits"
@@ -222,6 +225,45 @@ unknowns:
 	   GROUP BY 1, 2 \
 	   ORDER BY n DESC \
 	   LIMIT 50;"
+
+# ---- Tile cache ----
+#
+# The API container is distroless and has no shell, so we run a
+# small helper container (alpine) that mounts the same `tilecache`
+# named volume to inspect or clear it.
+
+TILE_HELPER := alpine:3.20
+
+# Helper to discover the tilecache volume name (compose-project-prefixed).
+_TILE_VOL = $$(docker inspect $$($(COMPOSE) ps -q api 2>/dev/null) \
+	--format '{{range .Mounts}}{{if eq .Destination "/var/cache/tiles"}}{{.Name}}{{end}}{{end}}' \
+	2>/dev/null)
+
+tile-stats:
+	@echo "=== /tile-stats (in-memory since last API start) ==="
+	@curl -sf http://127.0.0.1:$(API_PORT)/tile-stats || echo "API not reachable"
+	@echo ""
+	@echo "=== On-disk cache ==="
+	@VOL=$(_TILE_VOL); \
+	if [ -z "$$VOL" ]; then \
+	  echo "  (api not running — no volume to inspect)"; \
+	else \
+	  docker run --rm -v "$$VOL:/cache:ro" $(TILE_HELPER) sh -c '\
+	    files=$$(find /cache -type f -name "*.png" 2>/dev/null | wc -l); \
+	    echo "  files: $$files"; \
+	    echo "  size:  $$(du -sh /cache 2>/dev/null | cut -f1)"'; \
+	fi
+
+tiles-clear:
+	@echo "This will delete all cached tiles. Ctrl-C now to cancel."
+	@sleep 2
+	@VOL=$(_TILE_VOL); \
+	if [ -z "$$VOL" ]; then \
+	  echo "Could not find tile cache volume — is the api running?"; \
+	  exit 1; \
+	fi; \
+	docker run --rm -v "$$VOL:/cache" $(TILE_HELPER) \
+	  sh -c 'rm -rf /cache/* /cache/.[!.]* 2>/dev/null; echo "Cleared."'
 
 # ---- Testing ----
 
