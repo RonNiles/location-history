@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -249,25 +250,50 @@ func indexOf(s, sub string) int {
 // Cache wires a Store and a Fetcher. Get is the only public entry
 // point; it serves from the Store when fresh and falls back to a
 // fetch + put when not.
+//
+// If Disabled is true (e.g. the startup probe failed), Cache.Get
+// short-circuits to a direct upstream fetch with no Store interaction.
+// This keeps the API serving while making the failure mode visible
+// via the X-Cache: disabled response header.
 type Cache struct {
-	Store   *Store
-	Fetcher *Fetcher
-	MaxAge  time.Duration
+	Store    *Store
+	Fetcher  *Fetcher
+	MaxAge   time.Duration
+	Logger   *slog.Logger
+	Disabled bool
 
 	// stats — concurrent-safe via mu
-	mu                          sync.Mutex
-	hitCount, missCount, errCount uint64
+	mu                                          sync.Mutex
+	hitCount, missCount, errCount, putFailCount uint64
 }
 
 // Result describes the outcome of Get for stats / Cache-Status header.
 type Result struct {
 	Bytes  []byte
-	Source string // "hit" | "miss" | "stale-revalidated"
+	Source string // "hit" | "miss" | "stale-revalidated" | "stale-fallback" | "miss-uncached" | "disabled"
 	Age    time.Duration
+}
+
+func (c *Cache) logger() *slog.Logger {
+	if c.Logger != nil {
+		return c.Logger
+	}
+	return slog.Default()
 }
 
 // Get returns tile bytes, fetching from upstream if not cached.
 func (c *Cache) Get(ctx context.Context, z, x, y int) (Result, error) {
+	if c.Disabled {
+		// Cache is offline (e.g. write-permission probe failed at
+		// startup). Serve directly from upstream, but tell the caller
+		// so they can surface it.
+		data, err := c.Fetcher.Fetch(ctx, z, x, y)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{Bytes: data, Source: "disabled", Age: 0}, nil
+	}
+
 	maxAge := c.MaxAge
 	if maxAge == 0 {
 		maxAge = MaxAge
@@ -287,10 +313,16 @@ func (c *Cache) Get(ctx context.Context, z, x, y int) (Result, error) {
 			// Upstream failed; serve stale rather than 5xx.
 			return Result{Bytes: data, Source: "stale-fallback", Age: age}, nil
 		}
-		_ = c.Store.Put(z, x, y, newBytes)
+		if perr := c.Store.Put(z, x, y, newBytes); perr != nil {
+			c.mu.Lock(); c.putFailCount++; c.mu.Unlock()
+			c.logger().Warn("tile cache: Put failed",
+				"z", z, "x", x, "y", y, "err", perr)
+		}
 		return Result{Bytes: newBytes, Source: "stale-revalidated", Age: 0}, nil
 	} else if !errors.Is(err, ErrNotFound) {
 		c.mu.Lock(); c.errCount++; c.mu.Unlock()
+		c.logger().Warn("tile cache: Get failed",
+			"z", z, "x", x, "y", y, "err", err)
 		return Result{}, err
 	}
 
@@ -300,20 +332,51 @@ func (c *Cache) Get(ctx context.Context, z, x, y int) (Result, error) {
 		return Result{}, err
 	}
 	if perr := c.Store.Put(z, x, y, data); perr != nil {
-		// Log via caller; don't fail the request just because we
-		// couldn't write the cache.
+		c.mu.Lock(); c.putFailCount++; c.mu.Unlock()
+		c.logger().Warn("tile cache: Put failed",
+			"z", z, "x", x, "y", y, "err", perr)
 		return Result{Bytes: data, Source: "miss-uncached", Age: 0}, nil
 	}
 	return Result{Bytes: data, Source: "miss", Age: 0}, nil
 }
 
+// Probe writes and reads a tiny file to verify the cache directory
+// is usable. Call this at startup; if it returns an error, set
+// Disabled = true so Get short-circuits gracefully.
+func (c *Cache) Probe() error {
+	probeBytes := []byte("probe")
+	probePath := filepath.Join(c.Store.Root, ".probe")
+	if err := os.MkdirAll(c.Store.Root, 0o755); err != nil {
+		return fmt.Errorf("mkdir cache root: %w", err)
+	}
+	if err := os.WriteFile(probePath, probeBytes, 0o644); err != nil {
+		return fmt.Errorf("write probe file (cache dir not writable): %w", err)
+	}
+	got, err := os.ReadFile(probePath)
+	if err != nil {
+		return fmt.Errorf("read probe file: %w", err)
+	}
+	if string(got) != string(probeBytes) {
+		return fmt.Errorf("probe round-trip mismatch")
+	}
+	_ = os.Remove(probePath)
+	return nil
+}
+
 // Stats returns counters for monitoring.
 type Stats struct {
-	Hits, Misses, Errors uint64
+	Hits, Misses, Errors, PutFailures uint64
+	Disabled                          bool
 }
 
 func (c *Cache) Stats() Stats {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return Stats{Hits: c.hitCount, Misses: c.missCount, Errors: c.errCount}
+	return Stats{
+		Hits:        c.hitCount,
+		Misses:      c.missCount,
+		Errors:      c.errCount,
+		PutFailures: c.putFailCount,
+		Disabled:    c.Disabled,
+	}
 }

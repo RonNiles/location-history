@@ -21,13 +21,25 @@ RUN go mod tidy && \
 
 # ---- runtime ----
 # distroless/static is ~2MB and contains only ca-certs, /etc/passwd
-# (for nonroot user), and tzdata. No shell, no package manager.
-FROM gcr.io/distroless/static-debian12:nonroot
+# and tzdata. No shell, no package manager.
+#
+# We deliberately run as root inside this container. Reasoning:
+#   * The api binary needs to write to a Docker named volume mounted
+#     at /var/cache/tiles. Named volumes are created root-owned by
+#     default, and there's no portable way to chown them at mount
+#     time without an init container or a non-distroless base.
+#   * The container has no shell, no exec capability beyond running
+#     the Go binary, and the api only opens the network port + cache
+#     dir. Root inside a sealed container with this attack surface
+#     is acceptable.
+#   * The host port is loopback-only.
+# If you'd rather run unprivileged: switch to alpine, add a tini
+# entrypoint that chowns /var/cache/tiles, and `USER 1000`.
+FROM gcr.io/distroless/static-debian12
 
 COPY --from=builder /out/server /server
 
 EXPOSE 8000
-USER nonroot:nonroot
 
 # DATABASE_URL and LISTEN are read from env. compose sets them.
 ENTRYPOINT ["/server"]

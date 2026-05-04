@@ -28,7 +28,7 @@ COMPOSE_RUN := $(COMPOSE) run --rm
         db-expose db-private \
         places places-unlabeled places-labeled place-show place-label place-unlabel place-search \
         unknowns \
-        tile-stats tiles-clear \
+        tile-stats tiles-clear tile-debug \
         reset
 
 help:
@@ -56,6 +56,7 @@ help:
 	@echo "  make coverage             - daily coverage summary"
 	@echo "  make unknowns             - inspect unrecognized records (forensics)"
 	@echo "  make tile-stats           - tile cache stats (hits / misses / bytes)"
+	@echo "  make tile-debug           - diagnose why tile-stats shows zeros"
 	@echo "  make tiles-clear          - delete all cached tiles (forces re-fetch)"
 	@echo "Places:"
 	@echo "  make places                       - top places by visits"
@@ -257,6 +258,52 @@ tiles-clear:
 	fi; \
 	docker run --rm -v "$$VOL:/cache" $(TILE_HELPER) \
 	  sh -c 'rm -rf /cache/* /cache/.[!.]* 2>/dev/null; echo "Cleared."'
+
+# tile-debug: one-shot diagnostic. Prints volume info, ownership /
+# permissions of the cache mount, and tries a write probe from the
+# helper container's perspective. Use this when tile-stats is empty
+# and you want to figure out why.
+tile-debug:
+	@echo "==================== api container ===================="
+	@$(COMPOSE) ps api 2>/dev/null || echo "(api not running)"
+	@echo ""
+	@echo "==================== api logs (last 40 lines) ===================="
+	@$(COMPOSE) logs --tail 40 api 2>/dev/null | grep -i tile || \
+	  echo "(no tile-related log lines — that itself is suspicious)"
+	@echo ""
+	@echo "==================== /tile-stats endpoint ===================="
+	@curl -sf http://127.0.0.1:$(API_PORT)/tile-stats || echo "API not reachable"
+	@echo ""
+	@echo "==================== Volume info ===================="
+	@VOL=$(_TILE_VOL); \
+	if [ -z "$$VOL" ]; then \
+	  echo "Could not find tile cache volume in api container."; \
+	  echo "Check 'docker compose ps api' and 'docker inspect <container>'."; \
+	  exit 0; \
+	fi; \
+	echo "  volume name: $$VOL"; \
+	docker volume inspect "$$VOL" --format '  mountpoint:  {{.Mountpoint}}' 2>/dev/null
+	@echo ""
+	@echo "==================== Mount perms (from helper container) ===================="
+	@VOL=$(_TILE_VOL); \
+	docker run --rm -v "$$VOL:/cache" $(TILE_HELPER) sh -c '\
+	  echo "  ls -ld /cache:"; \
+	  ls -ld /cache; \
+	  echo "  contents (top 10):"; \
+	  ls -la /cache 2>/dev/null | head -11 | sed "s/^/    /"; \
+	  echo "  total files: $$(find /cache -type f 2>/dev/null | wc -l)"; \
+	  echo "  total size:  $$(du -sh /cache 2>/dev/null | cut -f1)"'
+	@echo ""
+	@echo "==================== Live write probe (api perspective) ===================="
+	@PID=$$($(COMPOSE) ps -q api 2>/dev/null); \
+	if [ -z "$$PID" ]; then \
+	  echo "  api not running"; \
+	  exit 0; \
+	fi; \
+	echo "  api UID:  $$(docker inspect $$PID --format '{{.Config.User}}' 2>/dev/null || echo unknown)"; \
+	echo "  hint: a recent fix removed USER nonroot from the api Dockerfile."; \
+	echo "        if Config.User above is 'nonroot' or '65532', rebuild:"; \
+	echo "        make api-rebuild"
 
 # ---- Testing ----
 
