@@ -2,8 +2,13 @@
 //
 // Configuration via environment variables:
 //
-//	DATABASE_URL  postgresql://locuser:locpass@127.0.0.1:5432/location_history
-//	LISTEN        127.0.0.1:8000   (default; bind address for HTTP)
+//	DATABASE_URL          postgresql://locuser:locpass@127.0.0.1:5432/location_history
+//	LISTEN                127.0.0.1:8000  (default; bind address)
+//	TILE_CACHE_DIR        /var/cache/tiles  (default; disk cache root)
+//	TILE_UPSTREAM_URL     https://tile.openstreetmap.org/{z}/{x}/{y}.png  (default)
+//	TILE_USER_AGENT       location-history/0.1 (+https://example.invalid)  (default)
+//	TILE_RATE_PER_SEC     5   (default)
+//	TILE_BURST            20  (default)
 //
 // All endpoints are read-only. The server is intended to be exposed
 // to localhost only; the CORS middleware is permissive for that
@@ -20,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -28,6 +34,7 @@ import (
 	"github.com/locationhistory/api/internal/db"
 	"github.com/locationhistory/api/internal/handlers"
 	"github.com/locationhistory/api/internal/httpx"
+	"github.com/locationhistory/api/internal/tiles"
 )
 
 // uiFiles is the static SPA bundled into the binary at build time.
@@ -67,7 +74,27 @@ func main() {
 	defer pool.Close()
 	logger.Info("connected to database")
 
-	api := &handlers.API{Pool: pool, Logger: logger}
+	// Tile cache. The directory is configurable but we hardwire a
+	// sensible default and log what we're using.
+	tileDir := envOr("TILE_CACHE_DIR", "/var/cache/tiles")
+	tileUpstream := envOr("TILE_UPSTREAM_URL", "https://tile.openstreetmap.org/{z}/{x}/{y}.png")
+	tileUA := envOr("TILE_USER_AGENT", "location-history/0.1 (+https://example.invalid)")
+	tileRate := envOrInt("TILE_RATE_PER_SEC", 5)
+	tileBurst := envOrInt("TILE_BURST", 20)
+
+	if err := os.MkdirAll(tileDir, 0o755); err != nil {
+		logger.Warn("tile cache dir not writable; cache disabled", "dir", tileDir, "err", err)
+	}
+	tileCache := &tiles.Cache{
+		Store:   &tiles.Store{Root: tileDir},
+		Fetcher: tiles.NewFetcher(tileUpstream, tileUA, tileRate, tileBurst),
+		MaxAge:  tiles.MaxAge,
+	}
+	logger.Info("tile cache configured",
+		"dir", tileDir, "upstream", tileUpstream,
+		"rate_per_sec", tileRate, "burst", tileBurst)
+
+	api := &handlers.API{Pool: pool, Logger: logger, TileCache: tileCache}
 
 	r := chi.NewRouter()
 	r.Use(httpx.LogRequests(logger))
@@ -79,6 +106,8 @@ func main() {
 	r.Get("/signals", api.Signals)
 	r.Get("/segments", api.Segments)
 	r.Get("/points-near", api.PointsNear)
+	r.Get("/tiles/{z}/{x}/{y}.png", api.Tiles)
+	r.Get("/tile-stats", api.TileStats)
 
 	// Serve the embedded UI from /. The embed includes a "ui/"
 	// prefix; we strip it via fs.Sub so the file at ui/index.html
@@ -122,4 +151,23 @@ func main() {
 		logger.Error("shutdown", "err", err)
 	}
 	logger.Info("bye")
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func envOrInt(key string, def int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
 }

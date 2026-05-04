@@ -53,11 +53,26 @@ services:
     environment:
       <<: *app-db-url
       LISTEN: 0.0.0.0:8000
+      TILE_CACHE_DIR: /var/cache/tiles
+      # Customize via .env if you want a different upstream
+      # (e.g. a self-hosted tileserver-gl). Note: changing this
+      # does NOT invalidate existing cached tiles.
+      TILE_UPSTREAM_URL: "${TILE_UPSTREAM_URL:-https://tile.openstreetmap.org/{z}/{x}/{y}.png}"
+      # OSM tile usage policy requires identifying your application.
+      # Edit .env to use your own contact URL/email.
+      TILE_USER_AGENT: "${TILE_USER_AGENT:-location-history/0.1 (+https://example.invalid)}"
+      TILE_RATE_PER_SEC: "${TILE_RATE_PER_SEC:-5}"
+      TILE_BURST: "${TILE_BURST:-20}"
     ports:
       # Bound to loopback only — not visible to other machines on
       # your network. The host port is configurable via API_PORT
       # in .env (defaults to 8000).
       - "127.0.0.1:${API_PORT:-8000}:8000"
+    volumes:
+      # Persistent disk cache for upstream tiles. Survives container
+      # restarts and `make api-rebuild`. Inspect with `make tile-stats`
+      # or wipe with `make tiles-clear`.
+      - tilecache:/var/cache/tiles
     depends_on:
       db:
         condition: service_healthy
@@ -94,3 +109,4 @@ services:
 
 volumes:
   pgdata:
+  tilecache:
