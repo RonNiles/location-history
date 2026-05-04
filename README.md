@@ -471,6 +471,35 @@ make place-show ID=ChIJ...     # confirm it's the one you mean
 make place-label ID=ChIJ... NAME="The Italian place on 5th"
 ```
 
+### Places on the map
+
+The web UI has a **Places** layer in the sidebar (toggle, default on).
+Each place renders as a deep-plum-bordered circle, sized by the
+square root of its visit count so a place visited 100× isn't 10×
+larger than one visited 1×. Hover any place for a popup showing
+the user label, total visits, total time, and date range. For
+unlabeled places the popup also shows the raw `place_id` so you
+can copy it for `make place-label ID=...`.
+
+Places are deliberately **not filtered by date range** — they're
+a historical aggregate, so they remain a stable spatial anchor as
+you scroll through time with the date picker. The date range still
+controls visits, activities, signals, and the heatmap.
+
+### Radius search timeline
+
+For a frequently-visited place, the radius search returns dozens
+or hundreds of hits. Rather than a flat list, the results panel
+draws a **two-row timeline**: the top row is one bar per month
+(across the full span of matches), the bottom row appears when you
+click a month and shows one bar per day within that month. Bar
+heights scale with hit count.
+
+Click a day → the date picker snaps to that day and the map flies
+to the search center, so you see the full context of what you did
+that day, not just the radius hits. Click the active month again
+to collapse the days row.
+
 ## Trips and timeline memories
 
 Google occasionally produces `timelineMemory` records — multi-day

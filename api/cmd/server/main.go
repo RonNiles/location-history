@@ -118,6 +118,7 @@ func main() {
 	r.Get("/signals", api.Signals)
 	r.Get("/segments", api.Segments)
 	r.Get("/points-near", api.PointsNear)
+	r.Get("/places", api.Places)
 	r.Get("/tiles/{z}/{x}/{y}.png", api.Tiles)
 	r.Get("/tile-stats", api.TileStats)
 
