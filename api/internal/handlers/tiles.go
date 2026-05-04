@@ -80,8 +80,14 @@ func (a *API) TileStats(w http.ResponseWriter, r *http.Request) {
 	}
 	s := a.TileCache.Stats()
 	w.Header().Set("Content-Type", "application/json")
+	disabled := "false"
+	if s.Disabled {
+		disabled = "true"
+	}
 	body := []byte(`{"hits":` + strconv.FormatUint(s.Hits, 10) +
 		`,"misses":` + strconv.FormatUint(s.Misses, 10) +
-		`,"errors":` + strconv.FormatUint(s.Errors, 10) + `}` + "\n")
+		`,"errors":` + strconv.FormatUint(s.Errors, 10) +
+		`,"put_failures":` + strconv.FormatUint(s.PutFailures, 10) +
+		`,"disabled":` + disabled + `}` + "\n")
 	w.Write(body)
 }

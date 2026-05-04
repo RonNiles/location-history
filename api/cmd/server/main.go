@@ -82,17 +82,29 @@ func main() {
 	tileRate := envOrInt("TILE_RATE_PER_SEC", 5)
 	tileBurst := envOrInt("TILE_BURST", 20)
 
-	if err := os.MkdirAll(tileDir, 0o755); err != nil {
-		logger.Warn("tile cache dir not writable; cache disabled", "dir", tileDir, "err", err)
-	}
 	tileCache := &tiles.Cache{
 		Store:   &tiles.Store{Root: tileDir},
 		Fetcher: tiles.NewFetcher(tileUpstream, tileUA, tileRate, tileBurst),
 		MaxAge:  tiles.MaxAge,
+		Logger:  logger,
 	}
-	logger.Info("tile cache configured",
-		"dir", tileDir, "upstream", tileUpstream,
-		"rate_per_sec", tileRate, "burst", tileBurst)
+
+	// Probe the cache directory at startup. If it's not writable,
+	// disable the cache rather than letting every Put fail silently.
+	// The api stays up and serves tiles (with X-Cache: disabled) so
+	// you can still browse, but `make tile-stats` and the response
+	// headers will surface the problem loudly.
+	if err := tileCache.Probe(); err != nil {
+		logger.Error("TILE CACHE DISABLED — directory not writable",
+			"dir", tileDir, "err", err,
+			"hint", "named volumes are root-owned by default; "+
+				"check that the api container can write to "+tileDir)
+		tileCache.Disabled = true
+	} else {
+		logger.Info("tile cache configured",
+			"dir", tileDir, "upstream", tileUpstream,
+			"rate_per_sec", tileRate, "burst", tileBurst)
+	}
 
 	api := &handlers.API{Pool: pool, Logger: logger, TileCache: tileCache}
 
