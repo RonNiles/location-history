@@ -560,6 +560,40 @@ inspection:
 SELECT raw FROM unknown_records WHERE shape_hint = 'someNewKind' LIMIT 5;
 ```
 
+## Inspecting a single day
+
+When the UI shows something surprising for a particular day — or
+you just want to see what an ingest produced — `make day-query`
+dumps everything relevant to one calendar day in your chosen
+timezone:
+
+```bash
+make day-query DAY=2024-06-15
+make day-query DAY=2024-06-15 TZ=America/Los_Angeles
+```
+
+`DAY` is required (`YYYY-MM-DD`). `TZ` defaults to UTC; pass an IANA
+timezone to interpret the day in that zone — useful for matching
+what the web UI sees, since the UI uses the browser's local time.
+
+**Valid `TZ` values:**
+
+- IANA names like `America/Los_Angeles`, `Europe/London`,
+  `Asia/Tokyo` — preferred, DST-aware.
+- POSIX zone names like `PST8PDT`, `EST5EDT` — also DST-aware.
+- `UTC` (the default).
+
+**Avoid numeric offsets** like `-07:00` or `-07`: Postgres applies
+inverted sign to these (a quirk of the POSIX time-zone tradition),
+so `-07:00` actually means UTC**+**7. Bare digit forms like `-700`
+are not parsed at all and produce an error. Stick to IANA names.
+
+The output starts with the exact UTC window queried, then summary
+counts, then visit and activity segments, timeline memories,
+raw signals (capped at 200), activity records (capped at 200), and
+any unknown records ingested that day. Times are shown in the
+requested zone; the window header tells you the absolute moments.
+
 ### What's next
 
 Possible Phase 4 directions, in roughly increasing order of effort:

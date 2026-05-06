@@ -23,7 +23,7 @@ COMPOSE_RUN := $(COMPOSE) run --rm
 
 .PHONY: help up down build logs ps psql migrate downgrade \
         probe ingest ingest-dir dry-run dry-run-dir ingest-rebuild \
-        stats coverage \
+        stats coverage day-query \
         api-test api-rebuild api-logs api-shell \
         db-expose db-private \
         places places-unlabeled places-labeled place-show place-label place-unlabel place-search \
@@ -55,6 +55,8 @@ help:
 	@echo "Inspect:"
 	@echo "  make stats                - quick row counts and date span"
 	@echo "  make coverage             - daily coverage summary"
+	@echo "  make day-query DAY=YYYY-MM-DD [TZ=...]"
+	@echo "                            - dump everything relevant to a single day"
 	@echo "  make unknowns             - inspect unrecognized records (forensics)"
 	@echo "  make tile-stats           - tile cache stats (hits / misses / bytes)"
 	@echo "  make tile-debug           - diagnose why tile-stats shows zeros"
@@ -179,6 +181,36 @@ coverage:
 	     count(*) FILTER (WHERE has_segments) AS with_segments, \
 	     min(day) AS first_day, max(day) AS last_day \
 	   FROM daily_coverage;"
+
+# day-query: dump everything in the database that's relevant to a
+# single calendar day, in a chosen timezone. For debugging the
+# date-range plumbing, sanity-checking a suspicious day, or just
+# seeing what an ingest produced.
+#
+# Usage:
+#   make day-query DAY=2024-06-15
+#   make day-query DAY=2024-06-15 TZ=America/Los_Angeles
+#
+# DAY is required (YYYY-MM-DD).
+# TZ defaults to UTC; pass an IANA timezone to interpret DAY in that
+# zone. The window_start/window_end shown at the top of the output
+# tells you exactly what UTC range was queried.
+DAY ?=
+TZ  ?= UTC
+
+day-query:
+	@if [ -z "$(DAY)" ]; then \
+	  echo 'Usage: make day-query DAY=YYYY-MM-DD [TZ=America/Los_Angeles]'; \
+	  echo ''; \
+	  echo 'TZ accepts IANA names ("America/Los_Angeles") or POSIX zones'; \
+	  echo '("PST8PDT"). Avoid numeric offsets like "-07:00" — Postgres'; \
+	  echo "interprets them with inverted sign. Bare digits like '-700'"; \
+	  echo 'are not valid at all.'; \
+	  exit 2; \
+	fi
+	@$(COMPOSE) exec -T db psql -U locuser -d location_history \
+	  -v day='$(DAY)' -v tz='$(TZ)' -v ON_ERROR_STOP=on \
+	  < db/queries/day_query.sql
 
 # ---- Places (CLI labeling) ----
 
