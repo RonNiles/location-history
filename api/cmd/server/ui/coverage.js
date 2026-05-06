@@ -5,7 +5,7 @@
 //
 // Click on the strip to jump to a date.
 
-import { toYMD, dayStartUTC, dayEndUTC } from './api.js';
+import { toYMD, ymdToLocalDate } from './api.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -39,8 +39,13 @@ export class CoverageStrip {
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     if (!days.length || !startYMD || !endYMD) return;
 
-    const start = new Date(startYMD + 'T00:00:00Z');
-    const end = new Date(endYMD + 'T00:00:00Z');
+    // Parse the bracketing YMDs in local time so day-of-month
+    // alignment matches the user's intuition. We then walk by
+    // 86400000ms increments and let toYMD (also local) give us
+    // each YMD; small DST drifts in the time-of-day component are
+    // fine because we only ever look at the Y-M-D portion.
+    const start = ymdToLocalDate(startYMD);
+    const end = ymdToLocalDate(endYMD);
     const totalDays = Math.round((end - start) / 86400000) + 1;
     if (totalDays <= 0) return;
 
@@ -103,18 +108,21 @@ export class CoverageStrip {
       }
     }
 
-    // Axis labels.
+    // Axis labels — use local time so the user sees their own
+    // month boundaries. (Picking a Mar→Sep range as a Pacific user
+    // shouldn't show Feb on the strip just because the very start
+    // of March is still February in UTC.)
     if (axis) {
       const months = [];
       const stride = totalDays > 730 ? 6 : totalDays > 180 ? 3 : 1;
-      const cur = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
+      const cur = new Date(start.getFullYear(), start.getMonth(), 1);
       while (cur <= end) {
-        if (cur.getUTCMonth() % stride === 0) {
+        if (cur.getMonth() % stride === 0) {
           months.push(cur.toLocaleString(undefined, {
             month: 'short', year: 'numeric',
           }));
         }
-        cur.setUTCMonth(cur.getUTCMonth() + 1);
+        cur.setMonth(cur.getMonth() + 1);
       }
       axis.textContent = '';
       // Show first and last labels at minimum.
@@ -141,8 +149,8 @@ export class CoverageStrip {
     if (!this.startYMD || !this.endYMD || !this.onPick) return;
     const rect = this.svg.getBoundingClientRect();
     const fx = (e.clientX - rect.left) / rect.width;
-    const start = new Date(this.startYMD + 'T00:00:00Z').getTime();
-    const end = new Date(this.endYMD + 'T00:00:00Z').getTime();
+    const start = ymdToLocalDate(this.startYMD).getTime();
+    const end = ymdToLocalDate(this.endYMD).getTime();
     const ms = start + fx * (end - start);
     this.onPick(toYMD(new Date(ms)));
   }
