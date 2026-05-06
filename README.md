@@ -560,6 +560,39 @@ inspection:
 SELECT raw FROM unknown_records WHERE shape_hint = 'someNewKind' LIMIT 5;
 ```
 
+## Inspecting API calls
+
+For debugging the UI's interaction with the backend — especially
+"why did this search return these specific results?" — set two
+env vars on the api container:
+
+```
+LOG_FORMAT=json     # one JSON line per event, easy to pipe to jq
+LOG_BODIES=1        # capture up to 64KB of each response body
+```
+
+Drop them into your `.env` and `make api-rebuild`. Every request
+then logs as a single JSON object with `request_id`, `method`,
+`path`, `query`, `status`, `bytes`, `dur`, and `body` (parsed JSON
+when the response is JSON, raw string otherwise; `truncated: true`
+group when over the 64KB cap).
+
+Each response also carries an `X-Request-Id` header so you can
+correlate a flaky moment in the UI with its log line:
+
+```bash
+docker compose logs api -f | jq 'select(.path == "/points-near")'
+```
+
+`/tiles/*` and the embedded UI assets (`/`, `/app.js`, `/style.css`,
+`/vendor/*`) are always skipped — capturing tile PNGs would bloat
+the log without helping debug anything. Skipping is unconditional
+even when `LOG_BODIES=1`.
+
+Leave `LOG_BODIES` off for normal operation; the body capture adds
+allocation pressure in proportion to response sizes. Turn it on
+when you're hunting a specific bug.
+
 ## Inspecting a single day
 
 When the UI shows something surprising for a particular day — or

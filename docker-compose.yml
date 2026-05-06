@@ -63,6 +63,11 @@ services:
       TILE_USER_AGENT: "${TILE_USER_AGENT:-location-history/0.1 (+https://example.invalid)}"
       TILE_RATE_PER_SEC: "${TILE_RATE_PER_SEC:-5}"
       TILE_BURST: "${TILE_BURST:-20}"
+      # Logging — see .env.example. Default: human-readable text,
+      # bodies off. Set LOG_FORMAT=json and LOG_BODIES=1 in .env when
+      # debugging.
+      LOG_FORMAT: "${LOG_FORMAT:-text}"
+      LOG_BODIES: "${LOG_BODIES:-0}"
     ports:
       # Bound to loopback only — not visible to other machines on
       # your network. The host port is configurable via API_PORT
