@@ -99,10 +99,17 @@
       Click anywhere on the map to set the search center.
     </p>
     <div class="radius-controls" id="radius-controls" hidden>
-      <label>
-        <span>radius</span>
-        <input type="number" id="radius-m" value="200" min="10" max="100000" step="10" />
-        <span class="unit">m</span>
+      <label class="radius-input">
+        <span class="radius-label">radius</span>
+        <span class="radius-spinner">
+          <button type="button" class="radius-nudge" id="radius-down"
+                  aria-label="decrease radius" tabindex="-1">&minus;</button>
+          <input type="text" inputmode="decimal" id="radius-value"
+                 autocomplete="off" />
+          <button type="button" class="radius-nudge" id="radius-up"
+                  aria-label="increase radius" tabindex="-1">+</button>
+        </span>
+        <span class="unit" id="radius-unit">km</span>
       </label>
       <button id="btn-radius-cancel" class="ghost">cancel</button>
     </div>
@@ -111,6 +118,17 @@
   <section class="panel results" id="results-panel" hidden>
     <h2>Results <span class="count" id="results-count">—</span></h2>
     <div id="results-list"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Preferences</h2>
+    <label class="prefs-row">
+      <span>Units</span>
+      <span class="prefs-segmented" role="radiogroup" aria-label="Distance units">
+        <button type="button" class="seg-btn" data-units="km" id="units-km">km</button>
+        <button type="button" class="seg-btn" data-units="mi" id="units-mi">mi</button>
+      </span>
+    </label>
   </section>
 
   <footer class="sidebar-footer">
