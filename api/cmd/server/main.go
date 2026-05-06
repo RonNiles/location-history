@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -45,10 +46,30 @@ import (
 var uiFiles embed.FS
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
+	// Logger format and verbosity are env-controlled. Defaults:
+	//   LOG_FORMAT=text  — human-readable key=val (good for casual ops)
+	//   LOG_FORMAT=json  — one JSON object per line (good for piping
+	//                       to `jq`, especially when LOG_BODIES is on)
+	//   LOG_BODIES=1     — capture up to 64KB of each response body
+	//                       into the request log line. JSON content
+	//                       types are inlined as parsed JSON; others
+	//                       fall back to a string. Tile/UI responses
+	//                       are always skipped regardless.
+	logOpts := &slog.HandlerOptions{Level: slog.LevelInfo}
+	var logger *slog.Logger
+	switch strings.ToLower(envOr("LOG_FORMAT", "text")) {
+	case "json":
+		logger = slog.New(slog.NewJSONHandler(os.Stderr, logOpts))
+	default:
+		logger = slog.New(slog.NewTextHandler(os.Stderr, logOpts))
+	}
 	slog.SetDefault(logger)
+
+	logBodies := envOrBool("LOG_BODIES", false)
+	if logBodies {
+		logger.Info("response body capture enabled (LOG_BODIES=1)",
+			"max_bytes", httpx.MaxLoggedBodyBytes)
+	}
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -109,7 +130,7 @@ func main() {
 	api := &handlers.API{Pool: pool, Logger: logger, TileCache: tileCache}
 
 	r := chi.NewRouter()
-	r.Use(httpx.LogRequests(logger))
+	r.Use(httpx.LogRequests(logger, httpx.LogConfig{LogBodies: logBodies}))
 	r.Use(httpx.CORSLocal)
 
 	r.Get("/health", api.Health)
@@ -183,4 +204,22 @@ func envOrInt(key string, def int) int {
 		return def
 	}
 	return n
+}
+
+// envOrBool reads a boolean env var. We accept the conventional set
+// of truthy values so users don't have to remember a specific spelling:
+// "1", "true", "yes", "on" (case-insensitive) all enable; everything
+// else falls back to def.
+func envOrBool(key string, def bool) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if v == "" {
+		return def
+	}
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	return def
 }
