@@ -314,25 +314,82 @@ body {
   margin-top: 8px;
 }
 .radius-controls[hidden] { display: none; }
-.radius-controls label {
+.radius-controls .radius-input {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   flex: 1;
+  min-width: 0;
 }
-.radius-controls input {
+.radius-label {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--c-ink-muted);
+}
+
+/* The custom spinner: a strip with [-] [input] [+]. We hide the
+   native number-input spinner controls and roll our own so we can
+   step through the quasi-log grid (0.1, 0.2, 0.5, 1, 2, 5, ...). */
+.radius-spinner {
+  display: inline-flex;
+  align-items: stretch;
   flex: 1;
+  min-width: 0;
+  border: 1px solid var(--c-rule);
+}
+.radius-spinner:focus-within { border-color: var(--c-accent); }
+.radius-spinner input {
+  flex: 1;
+  min-width: 0;
   font-family: var(--f-mono);
   font-size: 12px;
   background: transparent;
-  border: 1px solid var(--c-rule);
-  padding: 4px 6px;
+  border: 0;
+  padding: 4px 4px;
   color: var(--c-ink);
   border-radius: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield;        /* hide spinner in firefox */
 }
+/* hide native spinner in webkit */
+.radius-spinner input::-webkit-inner-spin-button,
+.radius-spinner input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.radius-spinner input:focus { outline: none; }
+
+.radius-nudge {
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--c-rule);
+  padding: 0 8px;
+  font-family: var(--f-mono);
+  font-size: 13px;
+  line-height: 1;
+  color: var(--c-ink-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.radius-nudge:first-child {
+  border-left: 0;
+  border-right: 1px solid var(--c-rule);
+}
+.radius-nudge:hover {
+  color: var(--c-ink);
+  background: var(--c-paper-dim);
+}
+.radius-nudge:active {
+  background: var(--c-rule);
+}
+
 .radius-controls .unit {
   font-size: 10px;
   color: var(--c-ink-muted);
+  letter-spacing: 0.05em;
+  min-width: 14px;
 }
 .ghost {
   background: transparent;
@@ -344,6 +401,49 @@ body {
   cursor: pointer;
 }
 .ghost:hover { color: var(--c-ink); }
+
+/* ---------- preferences ---------- */
+
+.prefs-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.prefs-row > span:first-child {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--c-ink-dim);
+  text-transform: uppercase;
+}
+
+.prefs-segmented {
+  display: inline-flex;
+  border: 1px solid var(--c-rule);
+}
+.prefs-segmented .seg-btn {
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--c-rule);
+  padding: 3px 10px;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--c-ink-dim);
+  cursor: pointer;
+  letter-spacing: 0.04em;
+}
+.prefs-segmented .seg-btn:first-child {
+  border-left: 0;
+}
+.prefs-segmented .seg-btn:hover {
+  color: var(--c-ink);
+  background: var(--c-paper-dim);
+}
+.prefs-segmented .seg-btn.active {
+  background: var(--c-ink);
+  color: var(--c-paper);
+}
 
 /* ---------- results ---------- */
 

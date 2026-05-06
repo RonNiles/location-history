@@ -445,6 +445,29 @@ a single cinnabar accent for selected/active states. The goal is a
 calm, instrumental feel for long browsing sessions — the visual
 opposite of a marketing dashboard.
 
+### Preferences
+
+A small Preferences panel at the bottom of the sidebar carries
+per-browser settings, currently:
+
+- **Units** (km / mi). Affects the radius picker, popup distances,
+  and the map's scale control. Stored in `localStorage` under
+  `lh.prefs.v1` so it persists across reloads (per browser).
+
+The radius picker's +/- buttons step through a quasi-logarithmic
+grid in the chosen unit:
+
+```
+km:    0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100
+mi:    0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50
+```
+
+You can also type any value directly. If you type something
+off-grid (say `1.37 km`) and then click the arrow, the value snaps
+to the nearest grid value (`1`); the next click steps from there.
+This matches the way users typically use such a control: type a
+rough value, then nudge to taste.
+
 ## Places
 
 Google's `placeId` strings are promoted to a first-class `places`

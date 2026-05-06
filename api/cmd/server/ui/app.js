@@ -3,6 +3,10 @@
 
 import { API, dayStartUTC, dayEndUTC, toYMD, fmtTime, fmtDuration, fmtMeters } from './api.js';
 import { CoverageStrip } from './coverage.js';
+import { prefs } from './prefs.js';
+import {
+  gridForUnits, nudge, metersToUnit, unitToMeters, formatUnitValue,
+} from './distance.js';
 
 // ------------------------------ map setup ------------------------------
 
@@ -34,8 +38,10 @@ const MAP_STYLE = {
 
 // Attempt to construct the map. If WebGL is unavailable (or the
 // constructor throws for any reason), surface a helpful message
-// rather than silently leaving the page on "Loading…".
-let map;
+// but DON'T abort module execution — the rest of the app (prefs
+// panel, radius spinner, date controls) is still useful and the
+// user might want to interact with it.
+let map = null;
 try {
   map = new maplibregl.Map({
     container: 'map',
@@ -45,22 +51,25 @@ try {
     attributionControl: false,
   });
 } catch (e) {
+  console.warn('map construction failed:', e);
   showFatalError('webgl');
-  throw e;
 }
 
-// MapLibre also fires an 'error' event for runtime issues (e.g.
-// WebGL context lost). Catch those too.
-map.on('error', (e) => {
-  console.warn('map error:', e && e.error);
-  if (e && e.error && /webgl/i.test(String(e.error.message || ''))) {
-    showFatalError('webgl');
-  }
-});
+if (map) {
+  // MapLibre also fires an 'error' event for runtime issues (e.g.
+  // WebGL context lost). Catch those too.
+  map.on('error', (e) => {
+    console.warn('map error:', e && e.error);
+    if (e && e.error && /webgl/i.test(String(e.error.message || ''))) {
+      showFatalError('webgl');
+    }
+  });
 
-map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
-map.addControl(new maplibregl.AttributionControl({ compact: true }));
-map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
+  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+  map.addControl(new maplibregl.AttributionControl({ compact: true }));
+  // ScaleControl is installed by applyScaleControl() once the map
+  // loads, so it can be re-created when the unit preference changes.
+}
 
 function showFatalError(kind) {
   const m = document.getElementById('map');
@@ -136,8 +145,13 @@ const els = {
   btnRadius:     document.getElementById('btn-radius'),
   radiusHint:    document.getElementById('radius-hint'),
   radiusControls: document.getElementById('radius-controls'),
-  radiusM:       document.getElementById('radius-m'),
+  radiusValue:   document.getElementById('radius-value'),
+  radiusUp:      document.getElementById('radius-up'),
+  radiusDown:    document.getElementById('radius-down'),
+  radiusUnit:    document.getElementById('radius-unit'),
   btnRadiusCancel: document.getElementById('btn-radius-cancel'),
+  unitsKm:       document.getElementById('units-km'),
+  unitsMi:       document.getElementById('units-mi'),
   resultsPanel:  document.getElementById('results-panel'),
   resultsCount:  document.getElementById('results-count'),
   resultsList:   document.getElementById('results-list'),
@@ -153,6 +167,11 @@ const state = {
   radiusMode: false,
   radiusMarker: null,
   radiusCircleId: null,
+  // Source of truth for the search radius. The input field shows
+  // this converted to user units. Default 200m feels right for a
+  // "find this specific spot" search; the user changes it via the
+  // spinner or by typing.
+  radiusMeters: 200,
   lastRadiusCenter: null,  // [lng, lat] of last radius search
   lastRadiusMeters: null,
   lastRadiusHits: [],      // most-recent hits, used by timeline drill-down
@@ -197,7 +216,10 @@ function debounce(fn, wait) {
 
 // --------------------- map sources & layers (added once) ---------------
 
-map.on('load', async () => {
+if (map) map.on('load', async () => {
+  // Install the unit-aware scale control now that the map is ready.
+  applyScaleControl();
+
   // Empty sources; we replace data in setData calls.
   const empty = { type: 'FeatureCollection', features: [] };
 
@@ -671,7 +693,7 @@ els.quickRanges.addEventListener('click', (e) => {
 // ----------------------- layer toggles --------------------------
 
 function setLayerVisible(layerId, visible) {
-  if (!map.getLayer(layerId)) return;
+  if (!map || !map.getLayer(layerId)) return;
   map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none');
 }
 
@@ -692,6 +714,105 @@ els.layerPlaces.addEventListener('change', () => {
 els.layerHeatmap.addEventListener('change', () => {
   setLayerVisible('heatmap', els.layerHeatmap.checked);
 });
+
+// ----------------------- preferences ----------------------------
+
+// Initialize the units toggle from saved prefs and wire it up.
+// Changing units rerenders the radius display and re-creates the
+// MapLibre scale control (its `unit` is set at construction time).
+let scaleControl = null;
+function applyScaleControl() {
+  if (!map) return;
+  if (scaleControl) {
+    map.removeControl(scaleControl);
+    scaleControl = null;
+  }
+  const unit = prefs.get('units') === 'mi' ? 'imperial' : 'metric';
+  scaleControl = new maplibregl.ScaleControl({ unit });
+  map.addControl(scaleControl, 'bottom-left');
+}
+
+function refreshUnitsUI() {
+  const u = prefs.get('units');
+  els.unitsKm.classList.toggle('active', u === 'km');
+  els.unitsMi.classList.toggle('active', u === 'mi');
+  els.radiusUnit.textContent = u;
+  // Re-render the radius input value in the new unit.
+  els.radiusValue.value = formatUnitValue(metersToUnit(state.radiusMeters, u));
+}
+
+els.unitsKm.addEventListener('click', () => prefs.set('units', 'km'));
+els.unitsMi.addEventListener('click', () => prefs.set('units', 'mi'));
+
+prefs.subscribe(() => {
+  refreshUnitsUI();
+  if (map && map.loaded && map.loaded()) applyScaleControl();
+});
+
+// ----------------------- radius spinner --------------------------
+
+// Range constraints in meters — match the API's clamping.
+const RADIUS_MIN_M = 100;
+const RADIUS_MAX_M = 100_000;
+
+/** Read the input field, convert to meters, clamp, and update state.
+ *  Tolerates whitespace and a trailing unit. Used after manual
+ *  edits and after Enter / blur. */
+function commitRadiusInput() {
+  const u = prefs.get('units');
+  const raw = (els.radiusValue.value || '').trim().replace(/[a-zA-Z]/g, '');
+  const v = parseFloat(raw);
+  if (isNaN(v) || v <= 0) {
+    // Restore the displayed value — don't let an empty/invalid
+    // input clobber state.
+    els.radiusValue.value = formatUnitValue(metersToUnit(state.radiusMeters, u));
+    return;
+  }
+  let m = unitToMeters(v, u);
+  if (m < RADIUS_MIN_M) m = RADIUS_MIN_M;
+  if (m > RADIUS_MAX_M) m = RADIUS_MAX_M;
+  state.radiusMeters = m;
+  els.radiusValue.value = formatUnitValue(metersToUnit(m, u));
+}
+
+function nudgeRadius(direction) {
+  const u = prefs.get('units');
+  const grid = gridForUnits(u);
+  // Read whatever's currently displayed (may be off-grid if the user
+  // just typed a number) — the grid logic snaps if needed.
+  const currentDisplay = parseFloat(els.radiusValue.value);
+  const startVal = isNaN(currentDisplay)
+    ? metersToUnit(state.radiusMeters, u)
+    : currentDisplay;
+  const next = nudge(grid, startVal, direction);
+  let m = unitToMeters(next, u);
+  if (m < RADIUS_MIN_M) m = RADIUS_MIN_M;
+  if (m > RADIUS_MAX_M) m = RADIUS_MAX_M;
+  state.radiusMeters = m;
+  els.radiusValue.value = formatUnitValue(metersToUnit(m, u));
+}
+
+els.radiusUp.addEventListener('click',   () => nudgeRadius(+1));
+els.radiusDown.addEventListener('click', () => nudgeRadius(-1));
+
+// Manual entry: commit on Enter or blur.
+els.radiusValue.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    commitRadiusInput();
+    els.radiusValue.blur();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    nudgeRadius(+1);
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    nudgeRadius(-1);
+  }
+});
+els.radiusValue.addEventListener('blur', commitRadiusInput);
+
+// Bootstrap: paint initial unit/state into the UI.
+refreshUnitsUI();
 
 // ----------------------- radius search --------------------------
 
@@ -723,9 +844,11 @@ function clearRadius() {
 
 async function onMapClick(e) {
   if (!state.radiusMode) return;
+  // Make sure any in-progress manual edit gets committed first.
+  commitRadiusInput();
   const lat = e.lngLat.lat;
   const lng = e.lngLat.lng;
-  const radiusM = Math.max(10, Math.min(100000, +els.radiusM.value || 200));
+  const radiusM = state.radiusMeters;
 
   // Stash the search center for click-to-jump in the results panel.
   state.lastRadiusCenter = [lng, lat];

@@ -73,8 +73,30 @@ export function fmtDuration(ms) {
 }
 
 /** Format meters into a compact human string. */
+/** Format meters into a compact human string in the user's preferred
+ *  units (km or mi). Reads from prefs at call time so changing units
+ *  takes effect on the next render without callers needing to know. */
 export function fmtMeters(m) {
   if (m == null) return '—';
+  // Inline import-cycle dodge: read prefs lazily so this module
+  // doesn't need to import prefs.js at top level (which would create
+  // an import cycle since prefs may eventually need formatting).
+  const units = (window.__lhPrefs && window.__lhPrefs.units) || 'km';
+  if (units === 'mi') {
+    const FT_PER_M = 3.28084;
+    const MI_PER_M = 0.000621371;
+    if (m < 161) {  // < 0.1 mi -> show feet
+      return `${Math.round(m * FT_PER_M)}ft`;
+    }
+    const mi = m * MI_PER_M;
+    if (mi < 10) return `${mi.toFixed(2)}mi`;
+    if (mi < 100) return `${mi.toFixed(1)}mi`;
+    return `${Math.round(mi)}mi`;
+  }
+  // km (default)
   if (m < 1000) return `${Math.round(m)}m`;
-  return `${(m / 1000).toFixed(m < 10000 ? 2 : 1)}km`;
+  const km = m / 1000;
+  if (km < 10) return `${km.toFixed(2)}km`;
+  if (km < 100) return `${km.toFixed(1)}km`;
+  return `${Math.round(km)}km`;
 }
