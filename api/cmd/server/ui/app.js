@@ -952,36 +952,58 @@ function eachDayOfMonth(ym) {
   return out;
 }
 
+// Render the timeline. Top-level dispatch: if a month is active,
+// show only the days view; otherwise show only the months view.
+// Earlier versions stacked both rows, which forced the user to scroll
+// inside an already-shallow sidebar to see the day bars. Replacing
+// the months row with the days row (with a "back" affordance) keeps
+// the relevant content in view without scrolling.
 function renderRadiusTimeline(hits) {
-  const { byMonth, byDay } = bucketHits(hits);
   const list = els.resultsList;
   list.textContent = '';
+  if (!hits.length) return;
 
-  // Month-level container.
-  const monthsWrap = document.createElement('div');
-  monthsWrap.className = 'tl-row';
-  list.appendChild(monthsWrap);
+  if (state.activeRadiusMonth) {
+    renderDaysView(hits, state.activeRadiusMonth);
+  } else {
+    renderMonthsView(hits);
+  }
+}
 
-  // Bracket the months. Show every month from earliest to latest
-  // hit, even if some are zero-count (so visual gaps mean something).
+function renderMonthsView(hits) {
+  const { byMonth } = bucketHits(hits);
+  const list = els.resultsList;
+
   const ymKeys = [...byMonth.keys()].sort();
   if (!ymKeys.length) return;
   const allMonths = eachMonth(ymKeys[0], ymKeys[ymKeys.length - 1]);
-
-  // Find max count for bar scaling.
-  let maxMonth = 0;
-  for (const ym of allMonths) {
-    const n = (byMonth.get(ym) || []).length;
-    if (n > maxMonth) maxMonth = n;
-  }
 
   // Caption.
   const cap = document.createElement('div');
   cap.className = 'tl-caption';
   cap.textContent = `${hits.length} matches across ${allMonths.length} months. Click a month to expand.`;
-  list.insertBefore(cap, monthsWrap);
+  list.appendChild(cap);
 
-  // Render month bars. Each is a column of (bar, label).
+  // Find max count for bar scaling.
+  let maxMonth = 0;
+  for (const ym of allMonths) {
+    maxMonth = Math.max(maxMonth, (byMonth.get(ym) || []).length);
+  }
+
+  // The row goes inside a scroll wrapper so a many-year search can
+  // scroll horizontally instead of compressing each bar to a hair-
+  // line. The fill class makes bars fill available width when there
+  // are few enough that no scroll is needed.
+  const scroll = document.createElement('div');
+  scroll.className = 'tl-scroll';
+  const row = document.createElement('div');
+  row.className = 'tl-row';
+  // Reasonable threshold: at sidebar width ~300px content area and
+  // a 14px min-width per bar, ~21 months fit comfortably.
+  if (allMonths.length <= 21) row.classList.add('tl-row--fill');
+  scroll.appendChild(row);
+  list.appendChild(scroll);
+
   for (const ym of allMonths) {
     const n = (byMonth.get(ym) || []).length;
     const col = document.createElement('button');
@@ -1010,60 +1032,55 @@ function renderRadiusTimeline(hits) {
 
     col.addEventListener('click', () => {
       if (n === 0) return;
-      // Toggle: clicking the active month closes the days row.
-      if (state.activeRadiusMonth === ym) {
-        state.activeRadiusMonth = null;
-        renderRadiusTimeline(state.lastRadiusHits);
-        return;
-      }
       state.activeRadiusMonth = ym;
-      // Rerender to update the .active styling, then append days row.
-      // Use a focused render path that keeps the months element stable.
       renderRadiusTimeline(state.lastRadiusHits);
-      // After rerender, the cols are new — find the matching one and
-      // add days row right under it.
-      renderDaysRow(state.lastRadiusHits, ym);
     });
 
-    if (state.activeRadiusMonth === ym) {
-      col.classList.add('active');
-    }
-    monthsWrap.appendChild(col);
-  }
-
-  // If a month was already active (e.g. a re-render after clicking
-  // a sibling), draw its days row.
-  if (state.activeRadiusMonth) {
-    renderDaysRow(hits, state.activeRadiusMonth);
+    row.appendChild(col);
   }
 }
 
-function renderDaysRow(allHits, ym) {
+function renderDaysView(allHits, ym) {
   const { byDay } = bucketHits(allHits);
   const list = els.resultsList;
 
-  // Remove any existing days row
-  const existing = list.querySelector('.tl-row.tl-days');
-  if (existing) existing.remove();
+  // Back button + caption row.
+  const back = document.createElement('button');
+  back.className = 'tl-back';
+  back.textContent = '← all months';
+  back.addEventListener('click', () => {
+    state.activeRadiusMonth = null;
+    renderRadiusTimeline(state.lastRadiusHits);
+  });
+  list.appendChild(back);
 
-  const wrap = document.createElement('div');
-  wrap.className = 'tl-row tl-days';
-
-  const cap = document.createElement('div');
-  cap.className = 'tl-caption';
   const monthHits = (allHits || []).filter(h =>
     toYMD(new Date(h.start_ms)).slice(0, 7) === ym
   );
-  cap.textContent = `${ym}: ${monthHits.length} matches. Click a day to view it on the map.`;
+  const cap = document.createElement('div');
+  cap.className = 'tl-caption';
+  // Format the month nicely for the caption — "Jun 2024" rather
+  // than the bare "2024-06" string.
+  const [yy, mm] = ym.split('-');
+  const monthShort = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+mm - 1];
+  cap.textContent = `${monthShort} ${yy}: ${monthHits.length} matches. Click a day to view it on the map.`;
   list.appendChild(cap);
-  list.appendChild(wrap);
 
   const days = eachDayOfMonth(ym);
   let maxDay = 0;
   for (const ymd of days) {
-    const n = (byDay.get(ymd) || []).length;
-    if (n > maxDay) maxDay = n;
+    maxDay = Math.max(maxDay, (byDay.get(ymd) || []).length);
   }
+
+  const scroll = document.createElement('div');
+  scroll.className = 'tl-scroll';
+  const row = document.createElement('div');
+  row.className = 'tl-row tl-days';
+  // Days always fit in a sidebar at 10px each (≤ 31 days × 10 =
+  // 310px), so always use fill.
+  row.classList.add('tl-row--fill');
+  scroll.appendChild(row);
+  list.appendChild(scroll);
 
   for (const ymd of days) {
     const n = (byDay.get(ymd) || []).length;
@@ -1107,7 +1124,7 @@ function renderDaysRow(allHits, ym) {
       }
     });
 
-    wrap.appendChild(col);
+    row.appendChild(col);
   }
 }
 
