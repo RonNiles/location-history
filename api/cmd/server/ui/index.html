@@ -15,12 +15,46 @@
 </head>
 <body>
 
-<aside id="sidebar">
-  <header class="sidebar-header">
-    <h1>Location <span class="amp">&amp;</span> History</h1>
-    <p class="status" id="status">Loading…</p>
-  </header>
+<!-- Top bar holds app-global controls: title, radius search,
+     units. Things tied to the displayed data (date range, layers,
+     results) live in the sidebar. -->
+<header id="topbar">
+  <h1 class="topbar-title">Location <span class="amp">&amp;</span> History</h1>
 
+  <!-- Radius search lives here so the wider top bar can hold its
+       controls inline when active without disrupting the sidebar.
+       Default state: a single button. Active state: button stays
+       visible (now in cinnabar) and the spinner appears next to it. -->
+  <div class="topbar-radius" id="topbar-radius">
+    <button id="btn-radius" class="tool-btn">Radius search…</button>
+    <div class="radius-controls" id="radius-controls" hidden>
+      <span class="radius-label">radius</span>
+      <span class="radius-spinner">
+        <button type="button" class="radius-nudge" id="radius-down"
+                aria-label="decrease radius" tabindex="-1">&minus;</button>
+        <input type="text" inputmode="decimal" id="radius-value"
+               autocomplete="off" />
+        <button type="button" class="radius-nudge" id="radius-up"
+                aria-label="increase radius" tabindex="-1">+</button>
+      </span>
+      <span class="unit" id="radius-unit">km</span>
+      <button id="btn-radius-cancel" class="ghost">cancel</button>
+    </div>
+  </div>
+
+  <p class="status" id="status">Loading…</p>
+
+  <!-- Units toggle. Sits at the right end so it's out of the way
+       but always reachable. -->
+  <div class="topbar-units">
+    <span class="prefs-segmented" role="radiogroup" aria-label="Distance units">
+      <button type="button" class="seg-btn" data-units="km" id="units-km">km</button>
+      <button type="button" class="seg-btn" data-units="mi" id="units-mi">mi</button>
+    </span>
+  </div>
+</header>
+
+<aside id="sidebar">
   <section class="panel">
     <h2>Date range</h2>
     <div class="date-row">
@@ -90,45 +124,17 @@
     </ul>
   </section>
 
-  <section class="panel">
-    <h2>Tools</h2>
-    <button id="btn-radius" class="tool-btn">
-      Radius search…
-    </button>
-    <p class="tool-hint" id="radius-hint" hidden>
-      Click anywhere on the map to set the search center.
-    </p>
-    <div class="radius-controls" id="radius-controls" hidden>
-      <label class="radius-input">
-        <span class="radius-label">radius</span>
-        <span class="radius-spinner">
-          <button type="button" class="radius-nudge" id="radius-down"
-                  aria-label="decrease radius" tabindex="-1">&minus;</button>
-          <input type="text" inputmode="decimal" id="radius-value"
-                 autocomplete="off" />
-          <button type="button" class="radius-nudge" id="radius-up"
-                  aria-label="increase radius" tabindex="-1">+</button>
-        </span>
-        <span class="unit" id="radius-unit">km</span>
-      </label>
-      <button id="btn-radius-cancel" class="ghost">cancel</button>
-    </div>
-  </section>
+  <!-- The hint is shown only while the user hasn't yet clicked on
+       the map after activating radius search. It sits in the sidebar
+       (rather than the topbar) because it's a per-action affordance,
+       not a persistent control. -->
+  <p class="tool-hint" id="radius-hint" hidden>
+    Click anywhere on the map to set the search center.
+  </p>
 
   <section class="panel results" id="results-panel" hidden>
     <h2>Results <span class="count" id="results-count">—</span></h2>
     <div id="results-list"></div>
-  </section>
-
-  <section class="panel">
-    <h2>Preferences</h2>
-    <label class="prefs-row">
-      <span>Units</span>
-      <span class="prefs-segmented" role="radiogroup" aria-label="Distance units">
-        <button type="button" class="seg-btn" data-units="km" id="units-km">km</button>
-        <button type="button" class="seg-btn" data-units="mi" id="units-mi">mi</button>
-      </span>
-    </label>
   </section>
 
   <footer class="sidebar-footer">
