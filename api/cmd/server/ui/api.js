@@ -34,20 +34,47 @@ export const API = {
   places:  (params) => get('/places', params || {}),
 };
 
-/** Format an RFC3339 string from a YYYY-MM-DD date input value. */
-export function dayStartUTC(ymd) {
-  return `${ymd}T00:00:00Z`;
-}
-export function dayEndUTC(ymd) {
-  return `${ymd}T23:59:59Z`;
+/** Format an RFC3339 string for the start of a YMD in the browser's
+ *  local timezone. Includes the offset so the absolute moment is
+ *  unambiguous. We construct via the (year, month, day, ...) Date
+ *  constructor — this respects DST and ambiguous-hour edge cases
+ *  (e.g. spring-forward days that have only 23 hours).
+ *
+ *  Example: dayStartLocal("2024-05-06") in America/Los_Angeles →
+ *  "2024-05-06T00:00:00.000-07:00" */
+export function dayStartLocal(ymd) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(y, m - 1, d, 0, 0, 0, 0).toISOString();
+  // Note: toISOString() always returns UTC ('Z'). That's still
+  // correct — it represents the same absolute moment as the local
+  // midnight we constructed. The point isn't the formatting, it's
+  // that the moment is "midnight local" rather than "midnight UTC".
 }
 
-/** Convert a Date to YYYY-MM-DD in UTC. */
+/** Format an RFC3339 string for the end of a YMD in the browser's
+ *  local timezone. We use 23:59:59.999 rather than the next day's
+ *  midnight to keep parity with the existing API's <= end semantics. */
+export function dayEndLocal(ymd) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(y, m - 1, d, 23, 59, 59, 999).toISOString();
+}
+
+/** Convert a Date to YYYY-MM-DD in the browser's local timezone.
+ *  Used for date-input values and any "what day is this" question
+ *  the user asks (which they always ask in their local frame). */
 export function toYMD(d) {
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
+}
+
+/** Convert a YMD string into a Date at local midnight. Symmetrical
+ *  with toYMD(). Used by the coverage strip when walking a day
+ *  series and by the timeline buckets. */
+export function ymdToLocalDate(ymd) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(y, m - 1, d, 0, 0, 0, 0);
 }
 
 /** Pretty-print a millisecond timestamp in the user's local time. */

@@ -1,7 +1,7 @@
 // Main application. Orchestrates the map, the date picker, layer
 // toggles, hover popups, and the radius-search workflow.
 
-import { API, dayStartUTC, dayEndUTC, toYMD, fmtTime, fmtDuration, fmtMeters } from './api.js';
+import { API, dayStartLocal, dayEndLocal, toYMD, ymdToLocalDate, fmtTime, fmtDuration, fmtMeters } from './api.js';
 import { CoverageStrip } from './coverage.js';
 import { prefs } from './prefs.js';
 import {
@@ -184,12 +184,12 @@ const state = {
 
 const coverage = new CoverageStrip(els.coverageSvg, els.coverageAxis,
   (ymd) => {
-    // Picking on the strip jumps the start date if it's before the
-    // current start, otherwise the end date. Either way we keep the
-    // same span length.
-    const cur = new Date(els.dateStart.value).getTime();
-    const span = new Date(els.dateEnd.value).getTime() - cur;
-    const picked = new Date(ymd + 'T00:00:00Z').getTime();
+    // The strip click gives us a local YMD. Shift the date range so
+    // its start lands on the picked day, preserving the current span.
+    const curStart = ymdToLocalDate(els.dateStart.value).getTime();
+    const curEnd = ymdToLocalDate(els.dateEnd.value).getTime();
+    const span = curEnd - curStart;
+    const picked = ymdToLocalDate(ymd).getTime();
     els.dateStart.value = ymd;
     els.dateEnd.value = toYMD(new Date(picked + span));
     onDateRangeChange();
@@ -554,8 +554,8 @@ async function loadPlaces() {
 // ----------------------- segment loading -----------------------
 
 async function loadSegments() {
-  const start = dayStartUTC(els.dateStart.value);
-  const end   = dayEndUTC(els.dateEnd.value);
+  const start = dayStartLocal(els.dateStart.value);
+  const end   = dayEndLocal(els.dateEnd.value);
   const gen = ++state.segmentsGen;
 
   // Pick a simplification tolerance based on current map zoom.
@@ -629,8 +629,8 @@ async function loadSignals() {
   try {
     data = await API.signals({
       bbox,
-      start: dayStartUTC(els.dateStart.value),
-      end: dayEndUTC(els.dateEnd.value),
+      start: dayStartLocal(els.dateStart.value),
+      end: dayEndLocal(els.dateEnd.value),
       limit: 100000,
     });
   } catch (e) {
@@ -907,13 +907,16 @@ function renderResults(resp) {
 // ---------- radius timeline (months ⇒ days) ----------
 
 // Build {ym: hit[]} and {ymd: hit[]} maps from a flat hit list.
+// Bucketing is by local time, since the user's mental model of
+// "what day was this" is unambiguously local. A 11pm-PT visit on
+// May 5 should bucket as May 5, not May 6 (which is its UTC date).
 function bucketHits(hits) {
   const byMonth = new Map();
   const byDay = new Map();
   for (const h of hits) {
     const d = new Date(h.start_ms);
-    const ym  = d.toISOString().slice(0, 7);
-    const ymd = d.toISOString().slice(0, 10);
+    const ymd = toYMD(d);
+    const ym  = ymd.slice(0, 7);
     if (!byMonth.has(ym)) byMonth.set(ym, []);
     byMonth.get(ym).push(h);
     if (!byDay.has(ymd)) byDay.set(ymd, []);
@@ -939,8 +942,9 @@ function eachMonth(fromYM, toYM) {
 }
 function eachDayOfMonth(ym) {
   const [y, m] = ym.split('-').map(Number);
-  // Last day of month: day 0 of next month.
-  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  // Last day of month: day 0 of next month, evaluated in local time
+  // for consistency with the rest of the timeline.
+  const last = new Date(y, m, 0).getDate();
   const out = [];
   for (let d = 1; d <= last; d++) {
     out.push(`${ym}-${String(d).padStart(2, '0')}`);
@@ -1048,7 +1052,7 @@ function renderDaysRow(allHits, ym) {
   const cap = document.createElement('div');
   cap.className = 'tl-caption';
   const monthHits = (allHits || []).filter(h =>
-    new Date(h.start_ms).toISOString().slice(0, 7) === ym
+    toYMD(new Date(h.start_ms)).slice(0, 7) === ym
   );
   cap.textContent = `${ym}: ${monthHits.length} matches. Click a day to view it on the map.`;
   list.appendChild(cap);
