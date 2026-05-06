@@ -876,6 +876,27 @@ async function onMapClick(e) {
     return;
   }
   renderResults(resp);
+
+  // Fit the map to the bbox returned by the API. The bbox brackets
+  // every matched geometry plus the search circle, so the user
+  // sees the full spatial extent of what they matched (not just
+  // the immediate neighborhood of the click). Padding leaves a
+  // visual margin on each side; maxZoom prevents an over-zoom on
+  // tiny clusters where everything is essentially one point.
+  if (map && Array.isArray(resp.bbox) && resp.bbox.length === 4) {
+    const [minLng, minLat, maxLng, maxLat] = resp.bbox;
+    // Guard against degenerate boxes (single-point results before
+    // the circle is included; shouldn't happen given the SQL, but
+    // belt-and-braces). MapLibre will throw on a zero-area bbox.
+    if (maxLng > minLng && maxLat > minLat) {
+      map.fitBounds(
+        [[minLng, minLat], [maxLng, maxLat]],
+        { padding: 60, duration: 800, maxZoom: 17 },
+      );
+    } else {
+      map.flyTo({ center: [lng, lat], zoom: 15 });
+    }
+  }
 }
 
 function renderResults(resp) {

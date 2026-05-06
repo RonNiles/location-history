@@ -191,6 +191,66 @@ func (a *API) PointsNear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Compute a bounding box of all matched geometries plus the
+	// search circle. Used by the UI to fit the map to the results.
+	//
+	// Why include the search circle? It's the user's intent.
+	// A search center should never disappear off the edge of the
+	// view — even if all the matches happen to be on one side of
+	// it, panning to crop out the circle would feel disorienting.
+	//
+	// The circle is approximated with ST_Buffer on a geography (so
+	// the radius is honored in meters), then cast back to geometry
+	// for ST_Extent. We use 16 segments per quadrant which is
+	// plenty for a viewport bbox (the circle is just there to
+	// influence corners, not to be drawn).
+	//
+	// If no matches AND we still want the bbox to bracket the
+	// circle, the buffered point alone is enough — ST_Extent of a
+	// single polygon is just its envelope.
+	const bboxSQL = `
+		WITH q AS (
+			SELECT ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography AS pt
+		),
+		matched_segs AS (
+			SELECT COALESCE(center, path)::geometry AS g
+			FROM segments
+			WHERE start_ts < $5 AND end_ts >= $4
+			  AND ST_DWithin(COALESCE(center, path), (SELECT pt FROM q), $3)
+		),
+		matched_raw AS (
+			SELECT location::geometry AS g
+			FROM raw_signals
+			WHERE ts >= $4 AND ts < $5
+			  AND ST_DWithin(location, (SELECT pt FROM q), $3)
+		),
+		circle AS (
+			SELECT ST_Buffer((SELECT pt FROM q), $3, 16)::geometry AS g
+		),
+		all_geoms AS (
+			SELECT g FROM matched_segs
+			UNION ALL SELECT g FROM matched_raw
+			UNION ALL SELECT g FROM circle
+		)
+		SELECT
+			ST_XMin(ST_Extent(g)),
+			ST_YMin(ST_Extent(g)),
+			ST_XMax(ST_Extent(g)),
+			ST_YMax(ST_Extent(g))
+		FROM all_geoms`
+	var bboxMinLng, bboxMinLat, bboxMaxLng, bboxMaxLat *float64
+	bboxRow := a.Pool.QueryRow(r.Context(), bboxSQL,
+		lng, lat, radius, tw.Start, tw.End)
+	if err := bboxRow.Scan(&bboxMinLng, &bboxMinLat, &bboxMaxLng, &bboxMaxLat); err != nil {
+		// Don't fail the whole response — bbox is a convenience.
+		// Log and continue with a nil bbox.
+		a.Logger.Warn("points-near bbox", "err", err)
+	}
+	var bboxOut []float64
+	if bboxMinLng != nil && bboxMinLat != nil && bboxMaxLng != nil && bboxMaxLat != nil {
+		bboxOut = []float64{*bboxMinLng, *bboxMinLat, *bboxMaxLng, *bboxMaxLat}
+	}
+
 	resp := map[string]any{
 		"query": map[string]any{
 			"lat":      lat,
@@ -201,6 +261,7 @@ func (a *API) PointsNear(w http.ResponseWriter, r *http.Request) {
 		},
 		"raw_hits":     rawHits,
 		"segment_hits": segHits,
+		"bbox":         bboxOut, // [minLng, minLat, maxLng, maxLat]
 		"limit":        limit,
 	}
 	w.Header().Set("Content-Type", "application/json")
