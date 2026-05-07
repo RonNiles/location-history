@@ -23,7 +23,7 @@ COMPOSE_RUN := $(COMPOSE) run --rm
 
 .PHONY: help up down build logs ps psql migrate downgrade \
         probe ingest ingest-dir dry-run dry-run-dir ingest-rebuild \
-        stats coverage day-query \
+        stats coverage day-query day-query-with-points \
         api-test api-rebuild api-logs api-shell \
         db-expose db-private \
         places places-unlabeled places-labeled place-show place-label place-unlabel place-search \
@@ -57,6 +57,8 @@ help:
 	@echo "  make coverage             - daily coverage summary"
 	@echo "  make day-query DAY=YYYY-MM-DD [TZ=...]"
 	@echo "                            - dump everything relevant to a single day"
+	@echo "  make day-query-with-points DAY=YYYY-MM-DD [TZ=...]"
+	@echo "                            - same, with full coordinates and paths"
 	@echo "  make unknowns             - inspect unrecognized records (forensics)"
 	@echo "  make tile-stats           - tile cache stats (hits / misses / bytes)"
 	@echo "  make tile-debug           - diagnose why tile-stats shows zeros"
@@ -211,6 +213,37 @@ day-query:
 	@$(COMPOSE) exec -T db psql -U locuser -d location_history \
 	  -v day='$(DAY)' -v tz='$(TZ)' -v ON_ERROR_STOP=on \
 	  < db/queries/day_query.sql
+
+# day-query-with-points: companion to day-query that drills into
+# geographic detail. Where day-query gives the lean overview (counts,
+# durations, no coords beyond visit centroids), this one shows every
+# point: visit lat/lng, full activity paths as WKT plus extracted
+# endpoint coords, every raw signal uncapped.
+#
+# Use this when you want to answer "where exactly was I" — sanity-
+# checking GPS accuracy, tracing a route, or exporting coordinates
+# to an external tool. Output for a busy day can be substantial
+# (1000+ raw_signal rows is common); pipe to less or grep as needed.
+#
+# Records without geographic content (timeline_memories, unknowns,
+# activity_records — pure sensor inferences) are NOT shown here.
+# Use day-query for those.
+#
+# Usage:
+#   make day-query-with-points DAY=2024-06-15
+#   make day-query-with-points DAY=2024-06-15 TZ=America/Los_Angeles
+
+day-query-with-points:
+	@if [ -z "$(DAY)" ]; then \
+	  echo 'Usage: make day-query-with-points DAY=YYYY-MM-DD [TZ=America/Los_Angeles]'; \
+	  echo ''; \
+	  echo 'See `make day-query` for general overview.'; \
+	  echo 'This target focuses on geographic detail (coords, paths).'; \
+	  exit 2; \
+	fi
+	@$(COMPOSE) exec -T db psql -U locuser -d location_history \
+	  -v day='$(DAY)' -v tz='$(TZ)' -v ON_ERROR_STOP=on \
+	  < db/queries/day_query_with_points.sql
 
 # ---- Places (CLI labeling) ----
 
