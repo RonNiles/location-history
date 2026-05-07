@@ -284,6 +284,21 @@ body {
   border-color: var(--c-ink);
 }
 
+/* Row below the quick-range buttons holding the fit-to-range
+   button. Visually quieter than the quick-ranges so users see it
+   as a secondary affordance, not part of the primary preset row. */
+.range-actions {
+  margin-top: 8px;
+}
+.range-actions button {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+.range-actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* ---------- coverage strip ---------- */
 
 .coverage-strip {

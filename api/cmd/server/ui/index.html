@@ -73,6 +73,15 @@
       <button data-range="1y">1y</button>
       <button data-range="all">all</button>
     </div>
+    <!-- Fit-to-range affordance for manual date entry. The quick-
+         range buttons above already auto-fit when clicked; this
+         button gives the same outcome for users who entered dates
+         by hand. Disabled until both dates are present. -->
+    <div class="range-actions">
+      <button type="button" id="btn-fit-range" class="ghost" disabled>
+        fit map to range
+      </button>
+    </div>
     <div class="coverage-strip" id="coverage-strip">
       <svg id="coverage-svg" preserveAspectRatio="none"></svg>
       <div class="coverage-axis" id="coverage-axis"></div>
