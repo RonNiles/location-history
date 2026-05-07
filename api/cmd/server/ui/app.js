@@ -134,6 +134,7 @@ const els = {
   dateStart:     document.getElementById('date-start'),
   dateEnd:       document.getElementById('date-end'),
   quickRanges:   document.querySelector('.quick-ranges'),
+  btnFitRange:   document.getElementById('btn-fit-range'),
   layerVisits:   document.getElementById('layer-visits'),
   layerActivities: document.getElementById('layer-activities'),
   layerSignals:  document.getElementById('layer-signals'),
@@ -496,20 +497,22 @@ async function initialLoad() {
 
   // Mark "30d" quick-range as active.
   highlightQuickRange('30d');
+  refreshFitButtonEnabled();
 
-  // Fit map to data extent if we have it.
+  // Fit map to data extent if we have it. We use the same helper as
+  // the "all" preset and the manual fit button, but with a tighter
+  // maxZoom so an account whose data is in a single city doesn't
+  // boot at street level.
   if (extent.bbox_geojson) {
-    try {
-      const g = typeof extent.bbox_geojson === 'string'
-        ? JSON.parse(extent.bbox_geojson) : extent.bbox_geojson;
-      const ring = g.coordinates[0];
-      const lngs = ring.map(p => p[0]);
-      const lats = ring.map(p => p[1]);
-      map.fitBounds([
-        [Math.min(...lngs), Math.min(...lats)],
-        [Math.max(...lngs), Math.max(...lats)],
-      ], { padding: 40, duration: 0, maxZoom: 13 });
-    } catch (_) { /* ignore parse errors */ }
+    const bbox = bboxFromExtentPolygon(extent.bbox_geojson);
+    if (bbox && map) {
+      try {
+        map.fitBounds(
+          [[bbox[0], bbox[1]], [bbox[2], bbox[3]]],
+          { padding: 40, duration: 0, maxZoom: 13 },
+        );
+      } catch (_) { /* ignore parse errors */ }
+    }
   }
 
   // Fetch coverage for the entire data range — small enough that
@@ -668,7 +671,14 @@ function highlightQuickRange(name) {
   state.currentRange = name;
 }
 
-function applyQuickRange(name) {
+// Apply one of the preset date ranges. Sets the date inputs, kicks
+// off a fresh segments load (skipping the debounce so we can wait
+// on it), then fits the map to whatever the chosen range covers.
+//
+// The two-step flow — set dates, await load, fit — is deliberate:
+// the alternative (fit-then-load, or fit-from-stale-data) would
+// flash the map to the wrong place before the right data arrived.
+async function applyQuickRange(name) {
   if (!state.extent || !state.extent.end) return;
   const maxTime = new Date(state.extent.end);
   const minTime = state.extent.start ? new Date(state.extent.start) : maxTime;
@@ -686,9 +696,21 @@ function applyQuickRange(name) {
   els.dateStart.value = toYMD(start);
   els.dateEnd.value   = toYMD(maxTime);
   highlightQuickRange(name);
-  onDateRangeChange();
+  refreshFitButtonEnabled();
+
+  // Skip the debounce: the user asked for a complete range in a
+  // single click, no further input is coming.
+  coverage.setRange(els.dateStart.value, els.dateEnd.value);
+  await fitMapToCurrentRange({ presetName: name });
+  if (els.layerSignals.checked) loadSignals();
 }
 
+// Manual date entry path — the user might still be editing (changed
+// `from` but not `to` yet, or vice versa). We refresh the data so
+// they can see what they're typing affects, but we deliberately do
+// NOT auto-fit the map. That would zoom and pan in the middle of an
+// edit, which feels jarring. The "fit map to range" button lets the
+// user explicitly request a fit when they're done.
 const onDateRangeChange = debounce(() => {
   coverage.setRange(els.dateStart.value, els.dateEnd.value);
   loadSegments();
@@ -696,15 +718,104 @@ const onDateRangeChange = debounce(() => {
 }, 250);
 
 els.dateStart.addEventListener('change', () => {
-  highlightQuickRange(null); onDateRangeChange();
+  highlightQuickRange(null);
+  refreshFitButtonEnabled();
+  onDateRangeChange();
 });
 els.dateEnd.addEventListener('change', () => {
-  highlightQuickRange(null); onDateRangeChange();
+  highlightQuickRange(null);
+  refreshFitButtonEnabled();
+  onDateRangeChange();
 });
 els.quickRanges.addEventListener('click', (e) => {
   const r = e.target.dataset.range;
   if (r) applyQuickRange(r);
 });
+
+els.btnFitRange.addEventListener('click', () => {
+  // We don't pass presetName — manual fit always uses the segment
+  // bbox (not the extent shortcut). If the user typed dates that
+  // happen to span the full extent, segment bbox produces the same
+  // result anyway, modulo the limit-hit edge case.
+  fitMapToCurrentRange({ presetName: null });
+});
+
+// Enable the fit button only when both date inputs have parseable
+// values. We don't validate semantically (start <= end) because the
+// browser's date input already constrains via its own validation,
+// and a momentarily-inverted range during editing is harmless.
+function refreshFitButtonEnabled() {
+  const ok = !!(els.dateStart.value && els.dateEnd.value);
+  els.btnFitRange.disabled = !ok;
+}
+
+// Convert the GeoJSON polygon stored in state.extent.bbox_geojson
+// (an envelope from PostGIS via /extent) into a flat
+// [minLng, minLat, maxLng, maxLat] tuple. Returns null on parse
+// errors — caller falls back to a segment bbox in that case.
+function bboxFromExtentPolygon(g) {
+  try {
+    const poly = typeof g === 'string' ? JSON.parse(g) : g;
+    if (!poly || !poly.coordinates || !poly.coordinates[0]) return null;
+    const ring = poly.coordinates[0];
+    let minLng =  Infinity, minLat =  Infinity;
+    let maxLng = -Infinity, maxLat = -Infinity;
+    for (const p of ring) {
+      if (p[0] < minLng) minLng = p[0];
+      if (p[1] < minLat) minLat = p[1];
+      if (p[0] > maxLng) maxLng = p[0];
+      if (p[1] > maxLat) maxLat = p[1];
+    }
+    if (!isFinite(minLng) || !isFinite(maxLng)) return null;
+    return [minLng, minLat, maxLng, maxLat];
+  } catch {
+    return null;
+  }
+}
+
+// Fit the map to the currently-displayed date range. For "all" we
+// prefer the server-provided extent envelope (computed over every
+// segment in the database, so it's not subject to the /segments
+// fetch limit). For everything else we await fresh segments and
+// fit to their bbox.
+async function fitMapToCurrentRange({ presetName } = {}) {
+  if (!map) return;
+
+  // "all" shortcut: the extent endpoint already gave us a true bbox
+  // over every segment. Use that and skip the segment-fetch wait.
+  if (presetName === 'all' && state.extent && state.extent.bbox_geojson) {
+    const bbox = bboxFromExtentPolygon(state.extent.bbox_geojson);
+    if (bbox) {
+      // Trigger the data fetch in parallel — the user still expects
+      // segments to update in the panel, just don't await them.
+      loadSegments();
+      fitToBbox(bbox);
+      return;
+    }
+  }
+
+  // Default path: refresh segments, then fit to whatever they cover.
+  const data = await loadSegments();
+  const bbox = featureCollectionBBox(data);
+  if (!bbox) {
+    // No segments in this range. Leave the map alone — better than
+    // jumping to some arbitrary fallback.
+    return;
+  }
+  fitToBbox(bbox);
+}
+
+function fitToBbox(bbox) {
+  if (bbox[2] > bbox[0] && bbox[3] > bbox[1]) {
+    map.fitBounds(
+      [[bbox[0], bbox[1]], [bbox[2], bbox[3]]],
+      { padding: 60, duration: 800, maxZoom: 17 },
+    );
+  } else {
+    // Degenerate (single point). flyTo with sensible zoom.
+    map.flyTo({ center: [bbox[0], bbox[1]], zoom: 15, duration: 800 });
+  }
+}
 
 // ----------------------- layer toggles --------------------------
 
