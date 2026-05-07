@@ -468,6 +468,28 @@ to the nearest grid value (`1`); the next click steps from there.
 This matches the way users typically use such a control: type a
 rough value, then nudge to taste.
 
+### Great-circle rendering of long activities
+
+Activities with widely-spaced waypoints (most commonly flights —
+sometimes recorded as just a departure and arrival fix) are
+densified at render time so the rendered path follows the great
+circle rather than a straight Mercator chord. The threshold is
+50km per segment; below that, the chord and great circle differ by
+sub-pixel amounts at any zoom we care about. Above it, the
+deviation grows quadratically — a SFO→JFK flight rendered as a
+chord misses Chicago by ~900km on the map even though the actual
+flight passes within 25km of it.
+
+The stored geometry isn't mutated; we only densify the copy that
+flows into MapLibre and the day-click bbox computation. The
+heatmap also benefits — a flight contributes density along its
+actual path instead of just at its endpoints.
+
+A known limitation: paths crossing the antimeridian (e.g.
+LAX→Tokyo) will currently render as a "long way round" chord at
+the seam. This isn't fixed yet because most users don't encounter
+it; if it bites you, file an issue.
+
 ## Places
 
 Google's `placeId` strings are promoted to a first-class `places`

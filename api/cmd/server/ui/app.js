@@ -6,6 +6,7 @@ import { CoverageStrip } from './coverage.js';
 import { prefs } from './prefs.js';
 import {
   gridForUnits, nudge, metersToUnit, unitToMeters, formatUnitValue,
+  densifyFeatureCollection,
 } from './distance.js';
 
 // ------------------------------ map setup ------------------------------
@@ -584,6 +585,20 @@ async function loadSegments() {
       p.duration_min = Math.max(0, (p.end_ms - p.start_ms) / 60000);
     }
   }
+
+  // Replace long chord segments with great-circle-interpolated arcs.
+  // Activities stored as 2-point LineStrings (e.g. flights — Google
+  // sometimes records them with only departure/arrival fixes) would
+  // otherwise render as a Mercator-projected straight line that cuts
+  // visibly south of the actual flight path. The 50km threshold
+  // means short walks/drives are unaffected; the underlying stored
+  // geometry isn't mutated, only the rendered copy.
+  //
+  // The densification also flows through to the heatmap source below
+  // (so a flight contributes density along its actual path, not just
+  // its endpoints) and to the day-click bbox computation (so fitBounds
+  // follows the great-circle extent, including its northward bulge).
+  densifyFeatureCollection(data);
 
   map.getSource('segments').setData(data);
 
