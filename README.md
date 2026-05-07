@@ -643,6 +643,29 @@ raw signals (capped at 200), activity records (capped at 200), and
 any unknown records ingested that day. Times are shown in the
 requested zone; the window header tells you the absolute moments.
 
+### Geographic detail: `day-query-with-points`
+
+When you need actual coordinates rather than the lean overview —
+verifying GPS accuracy, tracing a specific route, exporting a path
+to an external tool — use the companion target:
+
+```bash
+make day-query-with-points DAY=2024-06-15 TZ=America/Los_Angeles
+```
+
+Same parameters as `day-query`. Output is focused on positional
+records: every visit with its centroid `lat`/`lng`, every activity
+with extracted endpoint coords plus the full path as WKT (paste-able
+into geojson.io or QGIS), and every raw signal **uncapped** with
+`lat`/`lng`/`accuracy_m`/`altitude_m`/`speed_mps`. Timeline
+memories, unknown records, and activity records (which are pure
+sensor inferences with no geometry) are intentionally excluded —
+use the plain `day-query` for those.
+
+Output for a busy day with continuous GPS can be substantial
+(1000+ raw_signal rows is normal). Pipe to `less`, `grep`, or a
+file as needed.
+
 ### What's next
 
 Possible Phase 4 directions, in roughly increasing order of effort:
