@@ -572,9 +572,9 @@ async function loadSegments() {
   } catch (e) {
     console.warn('segments', e);
     setStatus('Error loading segments');
-    return;
+    return null;
   }
-  if (gen !== state.segmentsGen) return; // stale
+  if (gen !== state.segmentsGen) return null; // stale
 
   // Annotate features with duration_min for the visits radius
   // expression.
@@ -610,6 +610,7 @@ async function loadSegments() {
   els.countVisits.textContent = nv.toLocaleString();
   els.countActivities.textContent = na.toLocaleString();
   setStatus(`${data.count.toLocaleString()} segments` + (data.count >= data.limit ? ' (limit hit)' : ''));
+  return data;
 }
 
 // ----------------------- raw signals loading -----------------------
@@ -1130,19 +1131,42 @@ function renderDaysView(allHits, ym) {
     }
     col.appendChild(lbl);
 
-    col.addEventListener('click', () => {
+    col.addEventListener('click', async () => {
       if (n === 0) return;
-      // Set date range to just this day, and pan to the search
-      // center. The map's segments query will pick up everything
-      // we did that day (not just the radius hits) so you get the
-      // surrounding context.
+      // The user has narrowed from a search through a month to a
+      // single day. The interesting question is now "what did I do
+      // that day?", not "what did I do that day near my search."
+      // So we set the date range to that day, load fresh segments,
+      // and fit the map to those segments' bbox — which may be
+      // anywhere on the planet, not necessarily near the search.
+      //
+      // Important: we bypass the debounced onDateRangeChange and
+      // call loadSegments directly so we can await it. Otherwise
+      // the fit would race the fetch and either land too early
+      // (no data yet) or get clobbered by an earlier flyTo.
       els.dateStart.value = ymd;
       els.dateEnd.value = ymd;
       highlightQuickRange(null);
-      onDateRangeChange();
-      if (state.lastRadiusCenter) {
-        map.flyTo({ center: state.lastRadiusCenter, zoom: 15 });
+      coverage.setRange(ymd, ymd);
+
+      const data = await loadSegments();
+      if (els.layerSignals.checked) loadSignals();
+
+      if (!map) return;
+      const bbox = featureCollectionBBox(data);
+      if (bbox && bbox[2] > bbox[0] && bbox[3] > bbox[1]) {
+        map.fitBounds(
+          [[bbox[0], bbox[1]], [bbox[2], bbox[3]]],
+          { padding: 60, duration: 800, maxZoom: 17 },
+        );
+      } else if (bbox) {
+        // Single point — bbox has zero area. Fly to the point at a
+        // sensible zoom rather than letting fitBounds pick maxZoom.
+        map.flyTo({ center: [bbox[0], bbox[1]], zoom: 15, duration: 800 });
       }
+      // If bbox is null (no segments at all that day, which shouldn't
+      // happen since the bar wouldn't have been clickable) we leave
+      // the map alone — better than guessing where to go.
     });
 
     row.appendChild(col);
@@ -1170,4 +1194,35 @@ function circleRingLngLat(lng, lat, meters, n = 64) {
     pts.push([(lng2 * 180) / Math.PI, (lat2 * 180) / Math.PI]);
   }
   return pts;
+}
+
+// Compute the bounding box of a GeoJSON FeatureCollection. Walks
+// every Point and every vertex of every LineString. Returns
+// [minLng, minLat, maxLng, maxLat] or null if empty / degenerate.
+//
+// Used after a day-click on the radius timeline so we can fit the
+// map to the day's actual activity rather than flying back to the
+// search center (which was the bug: a day picked from a search
+// over a far city would still zoom to home).
+function featureCollectionBBox(fc) {
+  if (!fc || !fc.features || fc.features.length === 0) return null;
+  let minLng =  Infinity, minLat =  Infinity;
+  let maxLng = -Infinity, maxLat = -Infinity;
+  const acc = (lng, lat) => {
+    if (lng < minLng) minLng = lng;
+    if (lat < minLat) minLat = lat;
+    if (lng > maxLng) maxLng = lng;
+    if (lat > maxLat) maxLat = lat;
+  };
+  for (const f of fc.features) {
+    const g = f.geometry;
+    if (!g) continue;
+    if (g.type === 'Point') {
+      acc(g.coordinates[0], g.coordinates[1]);
+    } else if (g.type === 'LineString') {
+      for (const c of g.coordinates) acc(c[0], c[1]);
+    }
+  }
+  if (!isFinite(minLng) || !isFinite(maxLng)) return null;
+  return [minLng, minLat, maxLng, maxLat];
 }
