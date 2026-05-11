@@ -753,9 +753,17 @@ class Writer:
     no duplicates are created.
     """
 
-    def __init__(self, conn: psycopg.Connection, dry_run: bool = False):
+    def __init__(self, conn: psycopg.Connection, dry_run: bool = False,
+                 run_id: Optional[int] = None):
         self.conn = conn
         self.dry_run = dry_run
+        # `run_id` is the id of the audit row in `import_runs` for the
+        # current run. Stamped onto every inserted row (created_import_run,
+        # last_seen_import_run) and refreshed on every matching upsert
+        # (last_seen_import_run only). May be None in some callers — when
+        # so, the tracking columns are left NULL, which is the same shape
+        # as rows that predate the 0006 migration.
+        self.run_id = run_id
 
     def setup_staging(self) -> None:
         if self.dry_run:
@@ -845,17 +853,34 @@ class Writer:
                         Jsonb(r.raw),
                         r.dedup_key,
                     ))
+            # Insert via the staging table, stamping run-tracking
+            # columns on every row. ON CONFLICT DO UPDATE updates
+            # ONLY the last-seen columns — actual data is never
+            # mutated, preserving idempotency for the user's data.
+            #
+            # We use RETURNING (xmax = 0) AS inserted to distinguish
+            # fresh inserts from updates of existing rows:
+            #   xmax = 0  → this statement inserted the row (new)
+            #   xmax != 0 → this statement updated an existing row
+            # That gives us a clean inserted/touched split without
+            # a second query.
             cur.execute("""
                 INSERT INTO raw_signals
-                    (ts, location, accuracy_m, altitude_m, speed_mps, source, raw, dedup_key)
+                    (ts, location, accuracy_m, altitude_m, speed_mps, source, raw, dedup_key,
+                     created_import_run, last_seen_import_run, last_seen_at)
                 SELECT
                     ts,
                     ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography,
-                    accuracy_m, altitude_m, speed_mps, source, raw, dedup_key
+                    accuracy_m, altitude_m, speed_mps, source, raw, dedup_key,
+                    %(run_id)s, %(run_id)s, now()
                 FROM stage_raw_signals
-                ON CONFLICT (dedup_key) DO NOTHING
-            """)
-            inserted = cur.rowcount
+                ON CONFLICT (dedup_key) DO UPDATE SET
+                    last_seen_import_run = EXCLUDED.last_seen_import_run,
+                    last_seen_at = EXCLUDED.last_seen_at
+                RETURNING (xmax = 0) AS inserted
+            """, {"run_id": self.run_id})
+            results = cur.fetchall()
+            inserted = sum(1 for (is_new,) in results if is_new)
             cur.execute("TRUNCATE stage_raw_signals")
         return (inserted, len(batch) - inserted)
 
@@ -898,7 +923,8 @@ class Writer:
                 INSERT INTO segments
                     (segment_type, start_ts, end_ts, center, path,
                      activity_type, activity_confidence, distance_m,
-                     place_id, raw, dedup_key)
+                     place_id, raw, dedup_key,
+                     created_import_run, last_seen_import_run, last_seen_at)
                 SELECT
                     segment_type, start_ts, end_ts,
                     CASE WHEN center_lat IS NOT NULL AND center_lng IS NOT NULL
@@ -908,11 +934,16 @@ class Writer:
                          THEN ST_SetSRID(ST_GeomFromText(path_wkt), 4326)::geography
                          ELSE NULL END,
                     activity_type, activity_confidence, distance_m,
-                    place_id, raw, dedup_key
+                    place_id, raw, dedup_key,
+                    %(run_id)s, %(run_id)s, now()
                 FROM stage_segments
-                ON CONFLICT (dedup_key) DO NOTHING
-            """)
-            inserted = cur.rowcount
+                ON CONFLICT (dedup_key) DO UPDATE SET
+                    last_seen_import_run = EXCLUDED.last_seen_import_run,
+                    last_seen_at = EXCLUDED.last_seen_at
+                RETURNING (xmax = 0) AS inserted
+            """, {"run_id": self.run_id})
+            results = cur.fetchall()
+            inserted = sum(1 for (is_new,) in results if is_new)
             cur.execute("TRUNCATE stage_segments")
         return (inserted, len(batch) - inserted)
 
@@ -939,12 +970,19 @@ class Writer:
                     ))
             cur.execute("""
                 INSERT INTO activity_records
-                    (ts, top_type, top_confidence, probables, raw, dedup_key)
-                SELECT ts, top_type, top_confidence, probables, raw, dedup_key
+                    (ts, top_type, top_confidence, probables, raw, dedup_key,
+                     created_import_run, last_seen_import_run, last_seen_at)
+                SELECT
+                    ts, top_type, top_confidence, probables, raw, dedup_key,
+                    %(run_id)s, %(run_id)s, now()
                 FROM stage_activity_records
-                ON CONFLICT (dedup_key) DO NOTHING
-            """)
-            inserted = cur.rowcount
+                ON CONFLICT (dedup_key) DO UPDATE SET
+                    last_seen_import_run = EXCLUDED.last_seen_import_run,
+                    last_seen_at = EXCLUDED.last_seen_at
+                RETURNING (xmax = 0) AS inserted
+            """, {"run_id": self.run_id})
+            results = cur.fetchall()
+            inserted = sum(1 for (is_new,) in results if is_new)
             cur.execute("TRUNCATE stage_activity_records")
         return (inserted, len(batch) - inserted)
 
@@ -1102,7 +1140,7 @@ def main(
                 run_id = cur.fetchone()[0]
                 conn.commit()
 
-        writer = Writer(conn, dry_run=dry_run)
+        writer = Writer(conn, dry_run=dry_run, run_id=run_id)
         writer.setup_staging()
 
         # ---- Phase A: rawSignals ----

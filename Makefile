@@ -23,7 +23,7 @@ COMPOSE_RUN := $(COMPOSE) run --rm
 
 .PHONY: help up down build logs ps psql migrate downgrade \
         probe ingest ingest-dir dry-run dry-run-dir \
-        stats coverage day-query day-query-with-points \
+        stats coverage day-query day-query-with-points import-runs \
         api-test api-rebuild api-logs api-shell \
         db-expose db-private \
         places places-unlabeled places-labeled place-show place-label place-unlabel place-search \
@@ -58,6 +58,7 @@ help:
 	@echo "                            - dump everything relevant to a single day"
 	@echo "  make day-query-with-points DAY=YYYY-MM-DD [TZ=...]"
 	@echo "                            - same, with full coordinates and paths"
+	@echo "  make import-runs          - import-run history + per-run row counts"
 	@echo "  make unknowns             - inspect unrecognized records (forensics)"
 	@echo "  make tile-stats           - tile cache stats (hits / misses / bytes)"
 	@echo "  make tile-debug           - diagnose why tile-stats shows zeros"
@@ -237,6 +238,23 @@ day-query-with-points:
 	@$(COMPOSE) exec -T db psql -U locuser -d location_history \
 	  -v day='$(DAY)' -v tz='$(TZ)' -v ON_ERROR_STOP=on \
 	  < db/queries/day_query_with_points.sql
+
+# import-runs: report on import runs and per-run row counts. The
+# `created_import_run` and `last_seen_import_run` columns let us
+# tell which run a row originated from and which run most recently
+# saw it (a re-run with the same source produces a no-op upsert
+# that only refreshes the last_seen_* columns).
+#
+# Three things to read from the output:
+#   * Run-by-run row counts (how many rows came from each run).
+#   * "Drifted" rows where created != last_seen (the row was seen
+#     in at least two runs — interesting for investigating duplicates
+#     or apparent changes between exports).
+#   * The most recent runs by start time, with row totals.
+import-runs:
+	@$(COMPOSE) exec -T db psql -U locuser -d location_history \
+	  -v ON_ERROR_STOP=on \
+	  < db/queries/import_runs.sql
 
 # ---- Places (CLI labeling) ----
 
