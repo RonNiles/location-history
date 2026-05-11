@@ -672,6 +672,39 @@ Output for a busy day with continuous GPS can be substantial
 (1000+ raw_signal rows is normal). Pipe to `less`, `grep`, or a
 file as needed.
 
+## Investigating import runs
+
+Migration `0006_import_run_tracking` adds three columns to
+`segments`, `raw_signals`, and `activity_records`:
+
+- `created_import_run` — id of the `import_runs` row that first
+  inserted this record. Set on INSERT, never changed.
+- `last_seen_import_run` — id of the most recent run that saw
+  this record. Refreshed on every matching upsert.
+- `last_seen_at` — wall-clock pairing for the above.
+
+The ingester's upsert clause was widened from `ON CONFLICT DO
+NOTHING` to `ON CONFLICT DO UPDATE` that only touches the two
+last-seen columns. Idempotency is preserved — user-visible data
+is never mutated on conflict — but a re-ingest of the same source
+now leaves a per-row record of which runs touched it.
+
+`make import-runs` reports:
+
+- Recent runs by id with their source paths and insert counts.
+- Per-run row counts (segments + raw_signals).
+- A drift summary: how many segments have been seen in one run
+  vs. multiple runs vs. predate the tracking.
+- Candidate duplicates: rows sharing `(type, start_ts, place_id)`
+  but with different `dedup_key` values — the most likely shape
+  of "duplicate-with-drift" between exports.
+
+Rows ingested before migration 0006 have `NULL` in all three new
+columns. They're reported as `(pre-migration)` in the per-run
+counts. Forensic tracking starts from the next ingest forward;
+historical backfill isn't done because we can't accurately attribute
+existing rows to runs that didn't record per-row provenance.
+
 ### What's next
 
 Possible Phase 4 directions, in roughly increasing order of effort:
