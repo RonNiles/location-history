@@ -864,6 +864,12 @@ class Writer:
             #   xmax != 0 → this statement updated an existing row
             # That gives us a clean inserted/touched split without
             # a second query.
+            # DISTINCT ON (dedup_key) collapses in-batch duplicates
+            # before ON CONFLICT sees them. Without this, two staged
+            # rows with the same dedup_key trigger CardinalityViolation
+            # ("ON CONFLICT DO UPDATE command cannot affect row a
+            # second time"). DO NOTHING used to swallow these silently;
+            # DO UPDATE does not.
             cur.execute("""
                 INSERT INTO raw_signals
                     (ts, location, accuracy_m, altitude_m, speed_mps, source, raw, dedup_key,
@@ -873,7 +879,10 @@ class Writer:
                     ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography,
                     accuracy_m, altitude_m, speed_mps, source, raw, dedup_key,
                     %(run_id)s, %(run_id)s, now()
-                FROM stage_raw_signals
+                FROM (
+                    SELECT DISTINCT ON (dedup_key) *
+                    FROM stage_raw_signals
+                ) s
                 ON CONFLICT (dedup_key) DO UPDATE SET
                     last_seen_import_run = EXCLUDED.last_seen_import_run,
                     last_seen_at = EXCLUDED.last_seen_at
@@ -919,6 +928,7 @@ class Writer:
                         Jsonb(s.raw),
                         s.dedup_key,
                     ))
+            # See write_raw_signals() for why DISTINCT ON is required.
             cur.execute("""
                 INSERT INTO segments
                     (segment_type, start_ts, end_ts, center, path,
@@ -936,7 +946,10 @@ class Writer:
                     activity_type, activity_confidence, distance_m,
                     place_id, raw, dedup_key,
                     %(run_id)s, %(run_id)s, now()
-                FROM stage_segments
+                FROM (
+                    SELECT DISTINCT ON (dedup_key) *
+                    FROM stage_segments
+                ) s
                 ON CONFLICT (dedup_key) DO UPDATE SET
                     last_seen_import_run = EXCLUDED.last_seen_import_run,
                     last_seen_at = EXCLUDED.last_seen_at
@@ -968,6 +981,7 @@ class Writer:
                         Jsonb(r.raw),
                         r.dedup_key,
                     ))
+            # See write_raw_signals() for why DISTINCT ON is required.
             cur.execute("""
                 INSERT INTO activity_records
                     (ts, top_type, top_confidence, probables, raw, dedup_key,
@@ -975,7 +989,10 @@ class Writer:
                 SELECT
                     ts, top_type, top_confidence, probables, raw, dedup_key,
                     %(run_id)s, %(run_id)s, now()
-                FROM stage_activity_records
+                FROM (
+                    SELECT DISTINCT ON (dedup_key) *
+                    FROM stage_activity_records
+                ) s
                 ON CONFLICT (dedup_key) DO UPDATE SET
                     last_seen_import_run = EXCLUDED.last_seen_import_run,
                     last_seen_at = EXCLUDED.last_seen_at
