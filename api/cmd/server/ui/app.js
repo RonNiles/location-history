@@ -365,10 +365,11 @@ if (map) map.on('load', async () => {
     },
   });
 
-  // Hover popups for visits and activities.
+  // Hover popups for visits, activities, places, and raw signals.
   attachHover('visits-circle', renderVisitPopup);
   attachHover('activities-line', renderActivityPopup);
   attachHover('places-circle', renderPlacePopup);
+  attachHover('signals-circle', renderSignalPopup);
 
   // Map click → if in radius mode, do the search.
   map.on('click', onMapClick);
@@ -455,6 +456,61 @@ function renderPlacePopup(f) {
     // Show place_id only if there's no friendly label, so users can
     // copy it for `make place-label ID=...`
     lines.push(`<hr/><div class="meta" style="user-select:text;font-size:9px;">${escapeHTML(p.id)}</div>`);
+  }
+  return lines.join('');
+}
+
+// Format a lng/lat pair as a compact user-selectable string. Six
+// decimals is ~11 cm precision at the equator — more than the
+// underlying GPS accuracy, so no useful bits are truncated.
+function fmtCoord(lng, lat) {
+  return `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+}
+
+// Popup for a single raw signal point. The two headline pieces of
+// information are timestamp (down to the second — consecutive raw
+// signals are often seconds apart) and coordinates (selectable so
+// the user can copy-paste them elsewhere). Accuracy, altitude, and
+// speed are shown when the underlying record had them; missing
+// fields are silently dropped rather than shown as "—" so a sparse
+// signal doesn't look like a broken one.
+function renderSignalPopup(f) {
+  const p = f.properties || {};
+  const g = f.geometry || {};
+  const coords = Array.isArray(g.coordinates) ? g.coordinates : [null, null];
+  const [lng, lat] = coords;
+
+  const lines = [`<div class="h signal">raw signal</div>`];
+  if (p.ts_ms != null) {
+    lines.push(`<div>${fmtTime(+p.ts_ms, { seconds: true })}</div>`);
+  }
+  if (lng != null && lat != null) {
+    // `user-select: text` makes the coordinate string highlightable
+    // for copy/paste. Tabular figures keep the digits aligned so the
+    // eye can compare consecutive signals easily.
+    lines.push(
+      `<div class="meta" style="user-select:text;font-variant-numeric:tabular-nums;">`
+      + fmtCoord(lng, lat) + `</div>`
+    );
+  }
+  if (p.acc_m != null) {
+    lines.push(`<div class="meta">accuracy ±${fmtMeters(+p.acc_m)}</div>`);
+  }
+  if (p.alt_m != null) {
+    lines.push(`<div class="meta">alt ${fmtMeters(+p.alt_m)}</div>`);
+  }
+  if (p.spd != null && +p.spd > 0) {
+    // spd is m/s from the underlying record. Convert to km/h or mph
+    // based on the user's units preference so it reads consistently
+    // with everything else in the app.
+    const u = window.__lhPrefs?.units || 'km';
+    const speedText = u === 'mi'
+      ? `${(+p.spd * 2.23694).toFixed(1)} mph`
+      : `${(+p.spd * 3.6).toFixed(1)} km/h`;
+    lines.push(`<div class="meta">speed ${speedText}</div>`);
+  }
+  if (p.src) {
+    lines.push(`<div class="meta">source ${escapeHTML(String(p.src))}</div>`);
   }
   return lines.join('');
 }
