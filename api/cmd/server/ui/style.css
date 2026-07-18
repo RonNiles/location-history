@@ -711,6 +711,7 @@ body {
 #hover-popup .h.act { color: var(--c-walking); }
 #hover-popup .h.visit { color: var(--c-visit); }
 #hover-popup .h.place { color: var(--c-place); font-style: normal; font-weight: 600; }
+#hover-popup .h.signal { color: var(--c-signal); }
 #hover-popup .meta { color: var(--c-ink-dim); font-size: 10px; }
 #hover-popup hr {
   border: none;

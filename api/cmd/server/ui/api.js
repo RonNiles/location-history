@@ -77,13 +77,18 @@ export function ymdToLocalDate(ymd) {
   return new Date(y, m - 1, d, 0, 0, 0, 0);
 }
 
-/** Pretty-print a millisecond timestamp in the user's local time. */
-export function fmtTime(ms) {
+/** Pretty-print a millisecond timestamp in the user's local time.
+ *  Pass `{seconds: true}` to include :SS precision — useful for
+ *  raw GPS signals where the interesting information is often "this
+ *  fix is 3 seconds after that one." */
+export function fmtTime(ms, opts = {}) {
   const d = new Date(ms);
-  return d.toLocaleString(undefined, {
+  const fmtOpts = {
     year: 'numeric', month: 'short', day: 'numeric',
     hour: '2-digit', minute: '2-digit',
-  });
+  };
+  if (opts.seconds) fmtOpts.second = '2-digit';
+  return d.toLocaleString(undefined, fmtOpts);
 }
 
 /** Format a duration in ms into a compact human string. */
