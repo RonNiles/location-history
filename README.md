@@ -15,6 +15,62 @@ run as one-shot containers on the same compose network.
 - Then bring it to your computer using some kind of file transfer (usb, Google Drive, etc.)
 - Keep them in a local directory on your computer. Their names should be Timeline.json, Timeline (2).json,...
 
+### Copying the export over USB with `gio` (GNOME / Ubuntu desktop)
+
+Phones show up over USB as MTP devices, which GNOME mounts through GVFS.
+`gio` talks to that mount directly, so you don't need a file manager.
+
+1. Plug in the phone, **unlock it**, tap the USB notification, and choose
+   **File transfer**. If the phone asks to allow access to its data, allow it.
+   If you skip this step, the mount appears but is empty.
+
+2. Find the device URI:
+
+   ```bash
+   gio mount -l | grep mtp://
+   # Mount(1): mtp -> mtp://motorola_moto_g_-_2025_ZY32L44PNH/
+   ```
+
+3. Find the export on the phone. The export usually goes to `Download/`, but it
+   depends where you saved it:
+
+   ```bash
+   PHONE="mtp://motorola_moto_g_-_2025_ZY32L44PNH"      # from step 2
+   gio list "$PHONE/"                                    # storage roots, e.g. "Internal shared storage"
+   gio list "$PHONE/Internal shared storage/Download/" | grep -i timeline
+   ```
+
+4. Copy it into `./data` **under a new name**. Without `-i`, `gio copy`
+   overwrites an existing file without asking, and every export is called
+   `Timeline.json`:
+
+   ```bash
+   ls data/                                    # see which Timeline (N).json names are taken
+   gio copy -i -p \
+     "$PHONE/Internal shared storage/Download/Timeline.json" \
+     "data/Timeline (3).json"
+   ```
+
+   `gio copy` keeps the phone's modification time, and `make ingest-dir` uses
+   it to put exports in order. Use a name that `make ingest-dir` recognizes:
+   `Timeline.json`, `Timeline (N).json`, or `location-history.json`.
+
+5. Import it with `make ingest-dir DIR=$PWD/data`. Files that were already
+   imported are skipped by hash.
+
+Tips:
+
+- The mount also shows up as a regular directory at
+  `/run/user/$(id -u)/gvfs/mtp:host=<device>/`, so `cd`, `ls`, and `cp` work
+  there too. Use the full path, because a relative `cd mtp\:host=...` only works
+  when you're already inside `/run/user/$(id -u)/gvfs/`. Copy files to local
+  disk before you read them. Docker can't bind-mount the GVFS path, and opening
+  files directly on the phone is slow.
+- If the mount is empty or stuck, unmount it, then unplug the phone, unlock it,
+  and plug it back in: `gio mount -u "$PHONE/"`.
+- If USB debugging is on, `adb pull "/sdcard/Download/Timeline.json" "data/Timeline (3).json"`
+  works without MTP.
+
 ## Prerequisites
 
 - Ubuntu 24 (or anything with Docker + Compose v2)
