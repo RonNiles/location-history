@@ -235,6 +235,17 @@ covered:
 make coverage
 ```
 
+To see exactly where the raw-signal holes are:
+
+```bash
+make raw-gaps             # runs of missing UTC days + 15 longest gaps between fixes
+make raw-gaps GAPS_N=50   # show more of the longest gaps
+```
+
+Multi-week runs of missing days are periods with no export. Gaps of a few
+hours overnight are normal, because a phone sitting still logs few fixes.
+To look at an unusually long gap within a day, use `make day-query DAY=...`.
+
 ## Inspecting the data
 
 Quick stats:

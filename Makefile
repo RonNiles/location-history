@@ -23,7 +23,7 @@ COMPOSE_RUN := $(COMPOSE) run --rm
 
 .PHONY: help up down build logs ps psql migrate downgrade \
         probe ingest ingest-dir dry-run dry-run-dir ingest-rebuild \
-        stats coverage day-query day-query-with-points import-runs \
+        stats coverage raw-gaps day-query day-query-with-points import-runs \
         api-test api-rebuild api-logs api-shell \
         db-expose db-private \
         places places-unlabeled places-labeled place-show place-label place-unlabel place-search \
@@ -55,6 +55,7 @@ help:
 	@echo "Inspect:"
 	@echo "  make stats                - quick row counts and date span"
 	@echo "  make coverage             - daily coverage summary"
+	@echo "  make raw-gaps [GAPS_N=15] - missing days + longest gaps in raw_signals"
 	@echo "  make day-query DAY=YYYY-MM-DD [TZ=...]"
 	@echo "                            - dump everything relevant to a single day"
 	@echo "  make day-query-with-points DAY=YYYY-MM-DD [TZ=...]"
@@ -184,6 +185,27 @@ coverage:
 	     count(*) FILTER (WHERE has_segments) AS with_segments, \
 	     min(day) AS first_day, max(day) AS last_day \
 	   FROM daily_coverage;"
+
+# raw-gaps: where are the holes in raw_signals? Prints runs of UTC
+# days with no fixes (usually stretches > ~30 days between exports),
+# then the GAPS_N longest gaps between consecutive fixes (overnight
+# gaps of a few hours are normal; much longer ones within a day are
+# worth a `make day-query`).
+GAPS_N ?= 15
+
+raw-gaps:
+	@$(COMPOSE) exec -T db psql -U locuser -d location_history \
+	  -c "\\echo '== Runs of UTC days with no raw signals =='" \
+	  -c "WITH days AS (SELECT DISTINCT ts::date AS d FROM raw_signals), \
+	        g AS (SELECT d, d - (row_number() OVER (ORDER BY d))::int AS grp FROM days), \
+	        runs AS (SELECT min(d) AS s, max(d) AS e FROM g GROUP BY grp), \
+	        gaps AS (SELECT e + 1 AS gap_start, lead(s) OVER (ORDER BY s) - 1 AS gap_end, \
+	                        lead(s) OVER (ORDER BY s) - e - 1 AS missing_days FROM runs) \
+	      SELECT * FROM gaps WHERE gap_end IS NOT NULL ORDER BY gap_start;" \
+	  -c "\\echo '== $(GAPS_N) longest gaps between consecutive fixes =='" \
+	  -c "SELECT lag(ts) OVER w AS gap_from, ts AS gap_to, ts - lag(ts) OVER w AS gap \
+	      FROM raw_signals WINDOW w AS (ORDER BY ts) \
+	      ORDER BY gap DESC NULLS LAST LIMIT $(GAPS_N);"
 
 # day-query: dump everything in the database that's relevant to a
 # single calendar day, in a chosen timezone. For debugging the
